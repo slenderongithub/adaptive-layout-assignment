@@ -1,0 +1,60 @@
+import { defineAdSpec } from "./spec";
+
+export const earbudsAdSpec = defineAdSpec({
+  id: "wireless-earbuds",
+  elements: [
+    {
+      id: "hero",
+      type: "image",
+      role: "hero-image",
+      priority: 2,
+      aspectRatio: 1.5,
+      canDrop: true,
+      src: "hero-earbuds.jpg",
+    },
+    {
+      id: "headline",
+      type: "text",
+      role: "headline",
+      priority: 1,
+      canDrop: false,
+      canTruncate: false,
+      content: "Studio-Grade Sound. All Day Battery.",
+    },
+    {
+      id: "price",
+      type: "text",
+      role: "price",
+      priority: 3,
+      canDrop: true,
+      canTruncate: false,
+      content: "$89.99",
+    },
+    {
+      id: "secondary",
+      type: "text",
+      role: "secondary",
+      priority: 4,
+      canDrop: true,
+      canTruncate: true,
+      content: "Free shipping on orders over $50. Ships within 24 hours.",
+    },
+    {
+      id: "cta",
+      type: "button",
+      role: "cta",
+      priority: 1,
+      canDrop: false,
+      label: "Shop Now",
+    },
+    {
+      id: "branding",
+      type: "image",
+      role: "branding",
+      priority: 5,
+      canDrop: true,
+      aspectRatio: 2.2,
+      src: "brand-logo.png",
+    },
+  ],
+});
