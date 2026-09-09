@@ -1,168 +1,718 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ==========================================================================
+   1. TOKENS
+   Everything below this block reads from here. No literal hex, no literal
+   spacing, no hand-picked radius anywhere else in this file.
+   ========================================================================== */
+
 :root {
-  color-scheme: dark;
-  --bg: #0b0c0f;
-  --panel: #16181d;
-  --border: #2a2d34;
-  --text: #e6e6e9;
-  --muted: #8b8f98;
-  --accent: #4d7cfe;
+  color-scheme: light;
+
+  /* ---- spacing: 4pt grid, no values off the scale ---------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* ---- radii -----------------------------------------------------------
+     Two rectangle sizes and one pill, that's the whole grammar:
+       pill  -> every interactive control, no exceptions
+       panel -> every content panel
+       shell -> the one outer container (stage window) that nests a panel
+     Nested radii are *derived*, never chosen: R_inner = R_outer - padding. */
+  --r-pill: 9999px;
+  --r-panel: 24px;
+  --r-shell: 32px;
+  --r-inset: calc(var(--r-panel) - var(--space-4)); /* 24 - 16 =  8 */
+  --r-stage: calc(var(--r-shell) - var(--space-4)); /* 32 - 16 = 16 */
+
+  /* ---- surfaces --------------------------------------------------------- */
+  --page-bg: #f3efe8;
+  --scrim-near: rgba(243, 239, 232, 0.52); /* over the shader, page top    */
+  --scrim-far: rgba(243, 239, 232, 0.8); /* over the shader, page edges  */
+  --fill-sunken: rgba(24, 21, 16, 0.05); /* inset tracks, code blocks     */
+  --fill-raised: rgba(255, 255, 255, 0.45); /* resting list rows             */
+  --fill-hover: rgba(255, 255, 255, 0.8);
+
+  /* ---- hairlines -------------------------------------------------------- */
+  --hairline: rgba(24, 21, 16, 0.1);
+  --hairline-strong: rgba(24, 21, 16, 0.2);
+
+  /* ---- glass ------------------------------------------------------------ */
+  --glass-fill: rgba(255, 255, 255, 0.5);
+  --glass-stroke-lit: rgba(255, 255, 255, 0.95); /* edge facing the light  */
+  --glass-stroke-shade: rgba(24, 21, 16, 0.06); /* edge facing away       */
+  --glass-blur: 24px;
+
+  /* ---- ink -------------------------------------------------------------- */
+  --ink: #17140f;
+  --ink-muted: rgba(23, 20, 15, 0.62);
+  --ink-faint: rgba(23, 20, 15, 0.42);
+
+  /* ---- selection: one inversion pair, flips with the theme -------------- */
+  --selected-bg: #17140f;
+  --selected-ink: #f7f4ee;
+
+  /* ---- accent ----------------------------------------------------------- */
+  --gradient-start: #2b261e;
+  --gradient-end: #a3603f;
+  --accent: #a3603f;
+  --danger: #c72d6c;
+
+  /* ---- elevation --------------------------------------------------------
+     One light source for the whole app: directly overhead. Every shadow
+     casts straight down (+y), every lit edge is the top edge, every inset
+     highlight sits at the top. Nothing rakes sideways. */
+  --shadow-raised: 0 1px 2px rgba(24, 21, 16, 0.06), 0 2px 6px rgba(24, 21, 16, 0.05);
+  --shadow-panel: 0 2px 8px rgba(24, 21, 16, 0.05), 0 16px 40px rgba(24, 21, 16, 0.09);
+  --shadow-stage: 0 4px 12px rgba(24, 21, 16, 0.1), 0 24px 64px rgba(24, 21, 16, 0.18);
+  --shadow-sunken: inset 0 1px 2px rgba(24, 21, 16, 0.06);
+
+  /* ---- motion ----------------------------------------------------------- */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-fast: 0.16s;
+  --dur-base: 0.28s;
+
+  /* ---- the simulated ad creative -------------------------------------
+     Its own palette — separate tokens, its own contrast rules — but it does
+     follow the app theme. A creative that stays black while the chrome around
+     it turns light reads as a bug, not as art direction. Both renderers (DOM
+     and Canvas) read exactly these, so the two paths cannot drift. */
+  --ad-bg-1: #fffdf9;
+  --ad-bg-2: #ece5d9;
+  --ad-ink: #17140f;
+  --ad-ink-muted: rgba(23, 20, 15, 0.62);
+  --ad-accent: #9a5a3b;
+  --ad-cta-bg: #17140f;
+  --ad-cta-ink: #faf7f2;
+  --ad-frame: rgba(24, 21, 16, 0.07);
+  --ad-mark-a: #a3603f;
+  --ad-mark-b: #d9b8a6;
+  --ad-mark-ink: #fffdf9;
+
+  /* ---- bridge to tailwind / magicui utility classes --------------------- */
+  --background: var(--page-bg);
+  --foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: var(--selected-ink);
+  --border: var(--hairline);
 }
+
+:root.dark {
+  color-scheme: dark;
+
+  --page-bg: #0a0a0a;
+  --scrim-near: rgba(8, 8, 8, 0.42);
+  --scrim-far: rgba(8, 8, 8, 0.84);
+  --fill-sunken: rgba(255, 255, 255, 0.05);
+  --fill-raised: rgba(255, 255, 255, 0.06);
+  --fill-hover: rgba(255, 255, 255, 0.12);
+
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.24);
+
+  --glass-fill: rgba(10, 10, 10, 0.44);
+  --glass-stroke-lit: rgba(255, 255, 255, 0.3);
+  --glass-stroke-shade: rgba(67, 67, 67, 0.1);
+
+  --ink: #ffffff;
+  --ink-muted: rgba(255, 255, 255, 0.62);
+  --ink-faint: rgba(255, 255, 255, 0.4);
+
+  --selected-bg: #ffffff;
+  --selected-ink: #0a0a0a;
+
+  --gradient-start: #fdfbf5;
+  --gradient-end: #dcb7ad;
+  --accent: #dcb7ad;
+  --danger: #e6528a;
+
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.24);
+  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.24), 0 16px 40px rgba(0, 0, 0, 0.36);
+  --shadow-stage: 0 4px 12px rgba(0, 0, 0, 0.36), 0 24px 64px rgba(0, 0, 0, 0.48);
+  --shadow-sunken: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+
+  --ad-bg-1: #1c1c1c;
+  --ad-bg-2: #0a0a0a;
+  --ad-ink: #ffffff;
+  --ad-ink-muted: rgba(255, 255, 255, 0.62);
+  --ad-accent: #dcb7ad;
+  --ad-cta-bg: #ffffff;
+  --ad-cta-ink: #0a0a0a;
+  --ad-frame: rgba(255, 255, 255, 0.08);
+  --ad-mark-a: #af79ed;
+  --ad-mark-b: #dcb7ad;
+  --ad-mark-ink: #0a0a0a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-border: var(--border);
+
+  --animate-rippling: rippling var(--duration) ease-out;
+  @keyframes rippling {
+    0% {
+      opacity: 1;
+    }
+    100% {
+      transform: scale(2);
+      opacity: 0;
+    }
+  }
+}
+
+/* ==========================================================================
+   2. BASE
+   ========================================================================== */
 
 * {
   box-sizing: border-box;
 }
 
+/* The page colour lives on <html> only. It propagates to the canvas, which
+   paints *behind* negative-z-index children, so the fixed Silk shader stays
+   visible. Painting it on <body> too would put an opaque in-flow block
+   background above the shader and hide it completely. */
+html {
+  background: var(--page-bg);
+  transition: background var(--dur-base) ease;
+}
+
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 system-ui, sans-serif;
+  color: var(--ink);
+  font: 16px/1.5 "Golos Text", "Golos Text Fallback", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: color var(--dur-base) ease;
 }
 
-.app {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 32px 20px 80px;
-}
-
-header h1 {
-  font-size: 24px;
-  margin: 0 0 4px;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.surface-picker {
-  margin: 24px 0;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-button {
+button,
+textarea {
   font: inherit;
   color: inherit;
-  background: #1f222a;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
 }
 
-button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+:where(a, button, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-.preset-buttons {
+/* ==========================================================================
+   3. PRIMITIVES
+   ========================================================================== */
+
+/* --- glass -------------------------------------------------------------
+   Fill + blur + a 1px gradient ring. The ring is the whole point: a flat
+   rgba() border reads as a translucent box, the gradient reads as an edge
+   catching the overhead light. Two mask layers, one clipped to the content
+   box and one to the border box, cancel everywhere except the 1px padding
+   band, so only the ring survives. */
+.glass {
+  position: relative;
+  background: var(--glass-fill);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  box-shadow: var(--shadow-panel);
+  transition: background var(--dur-base) ease, box-shadow var(--dur-base) ease;
+}
+
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, var(--glass-stroke-lit) 0%, var(--glass-stroke-shade) 70%);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+}
+
+/* --- panel: the single content-container geometry ---------------------- */
+.panel {
+  border-radius: var(--r-panel);
+  padding: var(--space-4);
+}
+
+/* --- segmented control: one component, used for both mode switches ----- */
+.segmented {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--r-pill);
+  background: var(--fill-sunken);
+  box-shadow: var(--shadow-sunken);
 }
 
-.preset-buttons button {
+.segmented button {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.segmented button:hover {
+  color: var(--ink);
+}
+
+.segmented button.active {
+  background: var(--selected-bg);
+  color: var(--selected-ink);
+  box-shadow: var(--shadow-raised);
+}
+
+/* --- solid button: the one "go" action ---------------------------------
+   Unlayered, so it wins over the tailwind utility classes baked into the
+   magicui RippleButton without having to out-argue tailwind-merge. */
+.btn-solid {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3) var(--space-6);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--selected-bg);
+  color: var(--selected-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.btn-solid:hover {
+  opacity: 0.88;
+}
+
+/* --- icon button -------------------------------------------------------- */
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.icon-button:hover {
+  background: var(--fill-hover);
+}
+
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* --- type --------------------------------------------------------------- */
+.muted {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   4. BACKGROUND
+   Two layers, not four: the live shader, and one static wash that keeps
+   type legible over it. No drifting gradients, no bezel.
+   ========================================================================== */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.backdrop-scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 50% 0%, var(--scrim-near) 0%, var(--scrim-far) 72%);
+  transition: background var(--dur-base) ease;
+}
+
+/* ==========================================================================
+   5. LAYOUT
+   ========================================================================== */
+
+.page {
+  position: relative;
+  min-height: 100vh;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-6) var(--space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.navbar {
+  position: sticky;
+  top: var(--space-4);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 56px;
+  /* 8px right padding around a 40px control centres it in a 56px pill */
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-6);
+  border-radius: var(--r-pill);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.brand-mark {
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.navbar .segmented {
+  margin-left: auto;
+}
+
+.dashboard {
+  display: grid;
+  /* narrow enough that the 860px preview clears the stage's own padding */
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+/* ==========================================================================
+   6. COMPONENTS
+   ========================================================================== */
+
+/* --- surface picker ----------------------------------------------------- */
+.surface-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.preset-list button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--fill-raised);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+/* no sideways nudge: the row lifts toward the light and settles on press */
+.preset-list button:hover {
+  background: var(--fill-hover);
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-raised);
+}
+
+.preset-list button:active {
+  transform: scale(0.99);
+  box-shadow: none;
+}
+
+.preset-list button.active {
+  background: var(--selected-bg);
+  border-color: var(--selected-bg);
+  color: var(--selected-ink);
+  font-weight: 500;
+  box-shadow: var(--shadow-raised);
+}
+
+.preset-list .dims {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+}
+
+.preset-list button.active .dims {
+  color: color-mix(in srgb, var(--selected-ink) 60%, transparent);
+}
+
+.custom-tab {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-}
-
-.preset-buttons .dims {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.preset-buttons button.active .dims {
-  color: rgba(255, 255, 255, 0.8);
+  gap: var(--space-3);
 }
 
 .custom-tab textarea {
   width: 100%;
-  font: 13px/1.4 ui-monospace, monospace;
-  background: #0f1013;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px;
-  margin-bottom: 8px;
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-inset);
+  background: var(--fill-sunken);
+  color: var(--ink);
+  font: 12px/1.6 ui-monospace, monospace;
+  resize: vertical;
 }
 
-.error {
-  color: #ff6b6b;
+/* --- stage window ------------------------------------------------------- */
+.stage-window {
+  border-radius: var(--r-shell);
+  overflow: hidden;
 }
 
-.renderer-toggle {
+.titlebar {
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--hairline);
 }
 
-.stage-wrap {
+.titlebar-dots {
   display: flex;
-  justify-content: center;
-  padding: 20px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  gap: var(--space-2);
+}
+
+/* Lit from directly above, like every other surface: a vertical wash from a
+   tint of the base colour down to the base, a hairline rim to seat it into
+   the bar, and one soft drop below. Not a flat filled circle. */
+.titlebar-dots span {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dot) 72%, #fff) 0%, var(--dot) 78%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14), 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+.titlebar-dots span:nth-child(1) {
+  --dot: #ff5f57;
+}
+.titlebar-dots span:nth-child(2) {
+  --dot: #febc2e;
+}
+.titlebar-dots span:nth-child(3) {
+  --dot: #28c840;
+}
+
+.titlebar-label {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  color: var(--ink-faint);
+}
+
+.stage-body {
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  /* --preview-h comes from the renderer's own PREVIEW_HEIGHT so switching
+     surfaces never reflows the page around the window */
+  min-height: calc(var(--preview-h) + var(--space-4) * 2);
 }
 
 .stage {
   position: relative;
   overflow: hidden;
+  border-radius: var(--r-stage);
+  box-shadow: var(--shadow-stage);
+  transition: width var(--dur-base) var(--ease), height var(--dur-base) var(--ease);
 }
 
-.debug-panel {
-  margin-top: 20px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
+/* The preview is displayed under `transform: scale()`. react-three-fiber sizes
+   its canvas from getBoundingClientRect(), which reports the *scaled* box, and
+   three's setSize() writes that number straight back as the canvas's own CSS
+   width/height — so the canvas ends up previewScale times its container: 160%
+   and clipped on the 1.6x presets, 45% and pinned to the top-left on the 0.45x
+   ones. Forcing it back to fill its box fixes every surface at once; the
+   measured size still drives the drawing buffer and the camera frustum, and
+   since the scale is uniform the aspect ratio is unchanged, so nothing
+   distorts. !important is required to beat three's inline style. */
+.ad-hero canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 
-.debug-toggle {
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  font-weight: 600;
+/* --- debug panel -------------------------------------------------------- */
+.debug-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.debug-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.debug-meta {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
 }
 
 .debug-body {
-  padding: 0 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin-top: var(--space-4);
 }
 
 .debug-body h3 {
-  font-size: 13px;
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin: 16px 0 8px;
+  color: var(--ink-faint);
 }
 
 .debug-body ol {
   margin: 0;
-  padding-left: 20px;
-  font: 13px/1.5 ui-monospace, monospace;
+  padding-left: var(--space-6);
+  font: 12px/1.6 ui-monospace, monospace;
+  color: var(--ink-muted);
 }
 
+/* Capped so the control column finishes level with the stage column instead of
+   dangling a few hundred pixels below it. The dump scrolls inside the well. */
 .debug-body pre {
-  font: 12px/1.4 ui-monospace, monospace;
-  background: #0f1013;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px;
-  overflow-x: auto;
-  max-height: 320px;
-  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-inset);
+  background: var(--fill-sunken);
+  color: var(--ink-muted);
+  font: 12px/1.6 ui-monospace, monospace;
+  max-height: 176px;
+  overflow: auto;
+}
+
+/* ==========================================================================
+   7. RESPONSIVE
+   ========================================================================== */
+
+@media (max-width: 900px) {
+  .page {
+    padding: var(--space-4) var(--space-4) var(--space-8);
+  }
+
+  .navbar {
+    padding: var(--space-2);
+  }
+
+  .brand {
+    padding-left: var(--space-3);
+  }
+
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stage-body {
+    min-height: 0;
+  }
+}
+
+/* Below this the three navbar items stop fitting on one line: brand and theme
+   toggle hold the top row, the renderer switch drops to a full-width row. */
+@media (max-width: 560px) {
+  .navbar {
+    flex-wrap: wrap;
+  }
+
+  .navbar .icon-button {
+    margin-left: auto;
+  }
+
+  .navbar .segmented {
+    order: 1;
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+
+/* ==========================================================================
+   8. MOTION
+   ========================================================================== */
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RippleButton } from "./components/ui/ripple-button";
 import { defineSurfaceProfile, presetSurfaces, type SurfaceProfile } from "./surfaces";
 import type { Validated } from "./spec";
 
@@ -35,22 +36,23 @@ export function SurfacePicker({
 
   return (
     <div className="surface-picker">
-      <div className="tabs">
+      <div className="segmented" role="group" aria-label="Surface source">
         <button type="button" className={tab === "presets" ? "active" : ""} onClick={() => setTab("presets")}>
           Presets
         </button>
         <button type="button" className={tab === "custom" ? "active" : ""} onClick={() => setTab("custom")}>
-          Custom Surface
+          Custom
         </button>
       </div>
 
       {tab === "presets" ? (
-        <div className="preset-buttons">
+        <div className="preset-list">
           {presetSurfaces.map((s) => (
             <button
               key={s.id}
               type="button"
               className={s.id === selectedId ? "active" : ""}
+              aria-pressed={s.id === selectedId}
               onClick={() => onSelect(s)}
             >
               {s.id}
@@ -63,9 +65,9 @@ export function SurfacePicker({
       ) : (
         <div className="custom-tab">
           <textarea value={json} onChange={(e) => setJson(e.target.value)} rows={10} spellCheck={false} />
-          <button type="button" onClick={applyCustom}>
+          <RippleButton type="button" rippleColor="var(--page-bg)" className="btn-solid" onClick={applyCustom}>
             Resolve
-          </button>
+          </RippleButton>
           {error && <p className="error">{error}</p>}
         </div>
       )}
