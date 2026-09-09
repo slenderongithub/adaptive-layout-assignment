@@ -1,147 +1,440 @@
 import { checkInvariants } from "./invariants";
 import type { AdSpec, ElementRole, ElementSpec, Validated } from "./spec";
 import type { SurfaceProfile } from "./surfaces";
-import type { AxisMode, Rect, ResolvedElement, ResolvedLayout } from "./types";
+import type { Rect, ResolvedElement, ResolvedLayout, Template } from "./types";
 
-const GAP = 8;
-const CTA_MIN_WIDTH = 120;
-const CTA_DEFAULT_HEIGHT = 44;
-const HERO_MAX_FRACTION_ROW = 0.35;
-const HERO_MAX_FRACTION_COLUMN = 0.45;
-const GRID_LEFT_COLUMN_FRACTION = 0.55;
-const AXIS_ROW_THRESHOLD = 1.35;
-const AXIS_COLUMN_THRESHOLD = 0.75;
-const SHRINK_STEP_PX = 2;
-const IMAGE_SHRINK_FACTOR = 0.85;
-const MIN_USABLE_TEXT_PX = 10;
-const MIN_USABLE_IMAGE_PX = 20;
-const FONT_SIZE_BY_ROLE: Partial<Record<ElementRole, number>> = {
-  headline: 28,
-  price: 22,
-  secondary: 16,
+/* ==========================================================================
+   Tuning constants. Everything the engine decides is derived from the content
+   box — there are no per-surface special cases anywhere below this block.
+   ========================================================================== */
+
+/** Template is chosen from the content box's aspect ratio, nothing else. */
+const SPLIT_MIN_ASPECT = 0.95;
+const BANNER_MIN_ASPECT = 2.2;
+
+/* ---- type scale --------------------------------------------------------
+   One base size derived from the content box, with per-role multipliers on
+   top. A 1080px kiosk gets kiosk-sized type and a 300px widget gets
+   widget-sized type from the same rule; a fixed 28/22/16 ladder is wrong at
+   both ends. The height term stops a very wide, very short strip from asking
+   for type that can never stack inside it. */
+const TYPE_AREA_DIVISOR = 22;
+const TYPE_HEIGHT_DIVISOR = 9;
+const TYPE_MIN = 10;
+const TYPE_MAX = 72;
+const ROLE_TYPE_SCALE: Partial<Record<ElementRole, number>> = {
+  headline: 1.6,
+  price: 1.15,
+  secondary: 0.85,
 };
-const FAR_VIEWING_FONT_SCALE = 1.6;
-const AVG_CHAR_WIDTH_FACTOR = 0.55;
-const CORNER_ORDER: Array<"br" | "tr" | "bl" | "tl"> = ["br", "tr", "bl", "tl"];
+const FAR_VIEWING_TYPE_SCALE = 1.6;
+const LINE_HEIGHT = 1.25;
+/**
+ * The headline reads as a wordmark, so it auto-fits its column down to the
+ * type floor rather than stacking into a ragged tower. This is a *sizing*
+ * rule, not a degradation step: the priority ladder governs what survives, and
+ * gating "set the headline one step smaller" behind "drop the description
+ * first" trades a readable line break for a lost sentence.
+ */
+const MAX_HEADLINE_LINES = 2;
+
+/* ---- text metrics ------------------------------------------------------
+   ponytail: a three-bucket glyph table, not real font metrics — the resolver
+   is pure, so it cannot call measureText(). A flat per-character average runs
+   ~17% wide on mixed-case copy (every "i", "l" and space costs as much as an
+   "m"), which silently forces an extra line break; bucketing narrow / wide /
+   capital glyphs lands within ~1% of Golos Text's real advances. Both
+   renderers draw the lines the resolver produced, so DOM and Canvas can never
+   disagree about where the breaks are. Swap for an injected measure function
+   if a typeface ever lands where this is visibly off. */
+const GLYPH_NARROW = " .,:;'!|ilj()[]";
+const GLYPH_WIDE = "MWmw@%";
+const GLYPH_WIDTH_NARROW = 0.3;
+const GLYPH_WIDTH_WIDE = 0.85;
+const GLYPH_WIDTH_CAPITAL = 0.62;
+const GLYPH_WIDTH_DEFAULT = 0.52;
+/** semibold/bold roles carry a little more advance than the regular cut */
+const BOLD_WIDTH_MULTIPLIER = 1.03;
+/**
+ * Estimates must err wide. A line the resolver thinks fits by a hair but the
+ * real font renders 2px over gets silently ellipsised by the renderer's
+ * overflow guard — the reader loses words the engine believed it had placed.
+ * Wrapping ~4% early costs nothing and makes that impossible.
+ */
+const MEASURE_SAFETY = 1.04;
+
+/* ---- element sizing ----------------------------------------------------- */
+const GAP_RATIO = 0.6;
+const GAP_MIN = 4;
+const GAP_MAX = 32;
+/** The brand mark sits tight to the headline so the two read as one lockup. */
+const BRAND_LOCKUP_GAP_RATIO = 0.45;
+
+const CTA_FONT_RATIO = 0.85;
+const CTA_FONT_MIN = 12;
+const CTA_FONT_MAX = 28;
+const CTA_PAD_RATIO = 1.4;
+const CTA_HEIGHT_RATIO = 2.8;
+const CTA_MIN_WIDTH = 96;
+
+const BRAND_RATIO = 1.4;
+const BRAND_MIN = 16;
+const BRAND_MAX = 96;
+
+/** Below this a hero image communicates nothing, so it is dropped instead. */
+const HERO_MIN_PX = 56;
+const SPLIT_HERO_MAX_WIDTH_FRACTION = 0.45;
+const BANNER_HERO_MAX_WIDTH_FRACTION = 0.22;
+/** The copy column never yields more than this to the hero. */
+const MIN_TEXT_COLUMN_PX = 120;
+const MIN_TEXT_COLUMN_FRACTION = 0.35;
+
+/* ---- degradation -------------------------------------------------------- */
+const FONT_SHRINK_RATIO = 0.12;
+const IMAGE_SHRINK_FACTOR = 0.85;
+const MIN_USABLE_IMAGE_PX = 20;
+
+/**
+ * Reading order inside the copy block. Deliberately NOT the priority order:
+ * priority answers "what survives when space runs out", this answers "where
+ * does it go". Conflating the two is what put the CTA above the price.
+ */
+const READING_ORDER: ElementRole[] = ["branding", "headline", "price", "secondary", "cta"];
 
 function assertNever(x: never): never {
   throw new Error(`Unhandled case: ${JSON.stringify(x)}`);
 }
 
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/* ==========================================================================
+   Text metrics
+   ========================================================================== */
+
+function isBoldRole(role: ElementRole): boolean {
+  return role === "headline" || role === "price" || role === "cta";
+}
+
+function glyphWidth(ch: string): number {
+  if (GLYPH_NARROW.includes(ch)) return GLYPH_WIDTH_NARROW;
+  if (GLYPH_WIDE.includes(ch)) return GLYPH_WIDTH_WIDE;
+  if (ch >= "A" && ch <= "Z") return GLYPH_WIDTH_CAPITAL;
+  return GLYPH_WIDTH_DEFAULT;
+}
+
+/** Average advance per character of `text`, in em. */
+function averageGlyphWidth(text: string, role: ElementRole): number {
+  if (text.length === 0) return GLYPH_WIDTH_DEFAULT;
+  let em = 0;
+  for (const ch of text) em += glyphWidth(ch);
+  return (em / text.length) * (isBoldRole(role) ? BOLD_WIDTH_MULTIPLIER : 1) * MEASURE_SAFETY;
+}
+
+function measureText(text: string, fontSize: number, role: ElementRole): number {
+  return averageGlyphWidth(text, role) * text.length * fontSize;
+}
+
+function wrapText(text: string, fontSize: number, maxWidth: number, role: ElementRole): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && measureText(candidate, fontSize, role) > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length > 0 ? lines : [""];
+}
+
+function ellipsize(text: string, fontSize: number, maxWidth: number, role: ElementRole): string {
+  if (measureText(text, fontSize, role) <= maxWidth) return text;
+  // Seed from the whole string's average, then step down until it genuinely
+  // fits: the surviving prefix has its own glyph mix, so a single divide
+  // overshoots (and a 2px overshoot costs the element its place in the loop).
+  let cut = Math.max(1, Math.min(text.length, Math.floor(maxWidth / (averageGlyphWidth(text, role) * fontSize))));
+  let candidate = `${text.slice(0, cut).trimEnd()}…`;
+  while (cut > 1 && measureText(candidate, fontSize, role) > maxWidth) {
+    cut -= 1;
+    candidate = `${text.slice(0, cut).trimEnd()}…`;
+  }
+  return candidate;
+}
+
+/* ==========================================================================
+   State
+   ========================================================================== */
+
 interface ElementState {
   spec: ElementSpec;
   visible: boolean;
-  // text
+  /** text + button */
   fontSize?: number;
+  /** text — collapsed to a single ellipsised line */
   truncated?: boolean;
-  displayContent?: string;
-  // image (hero + branding) — current box size, aspect-ratio preserved
+  /** branding + button. The hero has no stored size: it is elastic (below). */
   width?: number;
   height?: number;
-  // branding placement
-  corner?: "br" | "tr" | "bl" | "tl";
 }
 
-interface ResolveContext {
-  contentBox: Rect;
-  axisMode: AxisMode;
+interface Ctx {
+  box: Rect;
+  template: Template;
+  base: number;
+  gap: number;
   tapFloor: number;
   textFloor: number;
-  baseFontScale: number;
 }
 
-function textFontFloor(spec: Extract<ElementSpec, { type: "text" }>, ctx: ResolveContext): number {
-  return Math.max(ctx.textFloor, MIN_USABLE_TEXT_PX, spec.minFontSize ?? 0);
+function fontFloor(spec: Extract<ElementSpec, { type: "text" }>, ctx: Ctx): number {
+  return Math.max(ctx.textFloor, TYPE_MIN, spec.minFontSize ?? 0);
 }
 
-function naturalFontSize(spec: Extract<ElementSpec, { type: "text" }>, ctx: ResolveContext): number {
-  const base = FONT_SIZE_BY_ROLE[spec.role] ?? 16;
-  return Math.max(base * ctx.baseFontScale, textFontFloor(spec, ctx), spec.minFontSize ?? 0);
-}
-
-function fitAspectInBox(aspectRatio: number, box: { width: number; height: number }): { width: number; height: number } {
-  if (box.width / box.height > aspectRatio) {
-    const height = box.height;
-    return { width: height * aspectRatio, height };
+function createState(spec: ElementSpec, ctx: Ctx): ElementState {
+  switch (spec.type) {
+    case "text": {
+      const scale = ROLE_TYPE_SCALE[spec.role] ?? 1;
+      const fontSize = Math.max(Math.round(ctx.base * scale), fontFloor(spec, ctx));
+      return { spec, visible: true, fontSize, truncated: false };
+    }
+    case "image": {
+      // The hero is sized from whatever the copy leaves over, every pass.
+      if (spec.role === "hero-image") return { spec, visible: true };
+      const height = Math.round(clamp(ctx.base * BRAND_RATIO, BRAND_MIN, BRAND_MAX));
+      return { spec, visible: true, width: height * spec.aspectRatio, height };
+    }
+    case "button": {
+      const fontSize = Math.round(clamp(ctx.base * CTA_FONT_RATIO, CTA_FONT_MIN, CTA_FONT_MAX));
+      const padX = fontSize * CTA_PAD_RATIO;
+      const width = Math.max(CTA_MIN_WIDTH, ctx.tapFloor, Math.round(measureText(spec.label, fontSize, "cta") + padX * 2));
+      const height = Math.max(ctx.tapFloor, Math.round(fontSize * CTA_HEIGHT_RATIO));
+      return { spec, visible: true, fontSize, width, height };
+    }
+    default:
+      return assertNever(spec);
   }
-  const width = box.width;
-  return { width, height: width / aspectRatio };
 }
 
-function heroNaturalSize(
-  spec: Extract<ElementSpec, { type: "image" }>,
-  ctx: ResolveContext,
-): { width: number; height: number } {
-  const { contentBox, axisMode } = ctx;
-  if (axisMode === "column") {
-    const cap = contentBox.height * HERO_MAX_FRACTION_COLUMN;
-    return fitAspectInBox(spec.aspectRatio, { width: contentBox.width, height: cap });
-  }
-  if (axisMode === "row") {
-    const cap = contentBox.width * HERO_MAX_FRACTION_ROW;
-    return fitAspectInBox(spec.aspectRatio, { width: cap, height: contentBox.height });
-  }
-  const colWidth = contentBox.width * GRID_LEFT_COLUMN_FRACTION;
-  return fitAspectInBox(spec.aspectRatio, { width: colWidth, height: contentBox.height });
+/* ==========================================================================
+   Composition
+
+   One pass produces a complete, centred layout plus a single boolean: does it
+   fit. The hero is *elastic* — it claims whatever the copy block leaves over,
+   which is what removes the dead space and stops the "35% of the width no
+   matter what" undersizing. Nothing here mutates state, so the degradation
+   loop can recompose from scratch after every step.
+   ========================================================================== */
+
+interface Composition {
+  placed: Map<string, Rect>;
+  lines: Map<string, string[]>;
+  /** effective size after the headline's auto-fit; may be below state.fontSize */
+  fontSizes: Map<string, number>;
+  align: "left" | "center";
+  overflow: boolean;
 }
 
-function brandingNaturalSize(ctx: ResolveContext): { width: number; height: number } {
-  return {
-    width: Math.max(60, ctx.contentBox.width * 0.12),
-    height: Math.max(24, ctx.contentBox.height * 0.1),
+interface BlockItem {
+  state: ElementState;
+  width: number;
+  height: number;
+  lines?: string[];
+  fontSize?: number;
+}
+
+function readingIndex(state: ElementState): number {
+  const i = READING_ORDER.indexOf(state.spec.role);
+  return i === -1 ? READING_ORDER.length : i;
+}
+
+function compose(states: Map<string, ElementState>, ctx: Ctx): Composition {
+  const { box, template, gap } = ctx;
+  const visible = [...states.values()].filter((s) => s.visible);
+  const hero = visible.find((s) => s.spec.role === "hero-image");
+  const heroAspect = hero && hero.spec.type === "image" ? hero.spec.aspectRatio : 1;
+  const cta = visible.find((s) => s.spec.role === "cta");
+
+  const align: "left" | "center" = template === "stack" ? "center" : "left";
+  const minTextColumn = Math.max(MIN_TEXT_COLUMN_PX, box.width * MIN_TEXT_COLUMN_FRACTION);
+  let overflow = false;
+
+  /* -- 1. carve the columns ------------------------------------------------
+     Copy always keeps `minTextColumn`; the hero may have the rest. */
+  let heroWidth = 0;
+  let heroHeight = 0;
+  let ctaColumn = 0;
+
+  if (template === "banner" && cta) ctaColumn = (cta.width ?? 0) + gap;
+
+  if (hero && template !== "stack") {
+    const maxFraction = template === "banner" ? BANNER_HERO_MAX_WIDTH_FRACTION : SPLIT_HERO_MAX_WIDTH_FRACTION;
+    const want = Math.min(box.height * heroAspect, box.width * maxFraction);
+    const room = box.width - ctaColumn - gap - minTextColumn;
+    heroWidth = Math.min(want, room);
+    if (heroWidth < HERO_MIN_PX) {
+      // Starved: keep it drawable so intermediate passes stay sane, and flag
+      // the overflow so the loop degrades until the hero's turn comes up.
+      heroWidth = HERO_MIN_PX;
+      overflow = true;
+    }
+    // Height is set in step 3, once the copy block has been measured.
+  }
+
+  const heroColumn = hero && template !== "stack" ? heroWidth + gap : 0;
+  const textWidth = box.width - heroColumn - ctaColumn;
+  if (textWidth < minTextColumn) overflow = true;
+
+  /* -- 2. build the copy block -------------------------------------------- */
+  const blockStates = visible
+    .filter((s) => s.spec.role !== "hero-image")
+    .filter((s) => !(template === "banner" && s.spec.role === "cta"))
+    .sort((a, b) => readingIndex(a) - readingIndex(b) || a.spec.priority - b.spec.priority);
+
+  const items: BlockItem[] = [];
+  for (const state of blockStates) {
+    const spec = state.spec;
+    if (spec.type === "text") {
+      const floor = fontFloor(spec, ctx);
+      let fontSize = state.fontSize ?? floor;
+      let lines = state.truncated
+        ? [ellipsize(spec.content, fontSize, textWidth, spec.role)]
+        : wrapText(spec.content, fontSize, textWidth, spec.role);
+
+      // Auto-fit the headline to MAX_HEADLINE_LINES before anything is dropped.
+      while (
+        spec.role === "headline" &&
+        !state.truncated &&
+        lines.length > MAX_HEADLINE_LINES &&
+        fontSize > floor
+      ) {
+        fontSize -= 1;
+        lines = wrapText(spec.content, fontSize, textWidth, spec.role);
+      }
+
+      const widest = Math.max(...lines.map((l) => measureText(l, fontSize, spec.role)));
+      // Only an unbreakable word can exceed the column; the loop shrinks type.
+      if (widest > textWidth + 0.5) overflow = true;
+      items.push({ state, width: textWidth, height: lines.length * fontSize * LINE_HEIGHT, lines, fontSize });
+    } else {
+      const width = state.width ?? 0;
+      const height = state.height ?? 0;
+      if (width > textWidth + 0.5) overflow = true;
+      items.push({ state, width, height });
+    }
+  }
+
+  // The brand mark is a lockup with the headline, not a separate stack entry —
+  // at a full gap it reads as an orb floating above the copy.
+  const gapAfter = (item: BlockItem) =>
+    item.state.spec.role === "branding" ? Math.max(GAP_MIN, Math.round(gap * BRAND_LOCKUP_GAP_RATIO)) : gap;
+
+  const blockHeight = items.reduce(
+    (sum, item, i) => sum + item.height + (i < items.length - 1 ? gapAfter(item) : 0),
+    0,
+  );
+
+  /* -- 3. the hero plate matches the copy block --------------------------
+     The plate is an image well, not a tight crop of the product: it spans
+     exactly the copy block's height so the two columns share a top and a
+     bottom edge, and the product is contained inside it. Sizing the plate to
+     the product instead leaves it visibly short against the copy. */
+  if (hero && template !== "stack") {
+    heroHeight = clamp(blockHeight, HERO_MIN_PX, box.height);
+  }
+
+  /* -- 4. place ------------------------------------------------------------ */
+  const placed = new Map<string, Rect>();
+  const lines = new Map<string, string[]>();
+  const fontSizes = new Map<string, number>();
+
+  const putBlock = (originX: number, originY: number, columnWidth: number) => {
+    let y = originY;
+    for (const item of items) {
+      const x = align === "center" ? originX + (columnWidth - item.width) / 2 : originX;
+      placed.set(item.state.spec.id, { x, y, width: item.width, height: item.height });
+      if (item.lines) lines.set(item.state.spec.id, item.lines);
+      if (item.fontSize !== undefined) fontSizes.set(item.state.spec.id, item.fontSize);
+      y += item.height + gapAfter(item);
+    }
   };
-}
 
-function truncateToWidth(content: string, fontSize: number, width: number): string {
-  const maxChars = Math.floor(width / (fontSize * AVG_CHAR_WIDTH_FACTOR));
-  if (content.length <= maxChars) return content;
-  return `${content.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
-}
-
-function createState(spec: ElementSpec, ctx: ResolveContext): ElementState {
-  if (spec.type === "text") {
-    const fontSize = naturalFontSize(spec, ctx);
-    return { spec, visible: true, fontSize, truncated: false, displayContent: spec.content };
+  if (template === "stack") {
+    if (hero) {
+      heroHeight = Math.max(0, box.height - blockHeight - gap);
+      heroWidth = heroHeight * heroAspect;
+      if (heroWidth > box.width) {
+        heroWidth = box.width;
+        heroHeight = box.width / heroAspect;
+      }
+      if (heroHeight < HERO_MIN_PX) {
+        heroHeight = HERO_MIN_PX;
+        heroWidth = HERO_MIN_PX * heroAspect;
+        overflow = true;
+      }
+    }
+    const total = blockHeight + (hero ? heroHeight + gap : 0);
+    if (total > box.height + 0.5) overflow = true;
+    let y = box.y + Math.max(0, (box.height - total) / 2);
+    if (hero) {
+      placed.set(hero.spec.id, {
+        x: box.x + (box.width - heroWidth) / 2,
+        y,
+        width: heroWidth,
+        height: heroHeight,
+      });
+      y += heroHeight + gap;
+    }
+    putBlock(box.x, y, box.width);
+  } else {
+    if (blockHeight > box.height + 0.5) overflow = true;
+    if (hero) {
+      placed.set(hero.spec.id, {
+        x: box.x,
+        y: box.y + (box.height - heroHeight) / 2,
+        width: heroWidth,
+        height: heroHeight,
+      });
+    }
+    putBlock(box.x + heroColumn, box.y + Math.max(0, (box.height - blockHeight) / 2), textWidth);
+    if (template === "banner" && cta) {
+      const width = cta.width ?? 0;
+      const height = cta.height ?? 0;
+      placed.set(cta.spec.id, {
+        x: box.x + box.width - width,
+        y: box.y + (box.height - height) / 2,
+        width,
+        height,
+      });
+    }
   }
-  if (spec.type === "image") {
-    const size = spec.role === "branding" ? brandingNaturalSize(ctx) : heroNaturalSize(spec, ctx);
-    return { spec, visible: true, width: size.width, height: size.height, corner: "br" };
-  }
-  // button (cta)
-  const width = Math.max(CTA_MIN_WIDTH, ctx.tapFloor);
-  const height = Math.max(CTA_DEFAULT_HEIGHT, ctx.tapFloor);
-  return { spec, visible: true, width, height };
+
+  return { placed, lines, fontSizes, align, overflow };
 }
 
-/** height contribution of a text element to a vertical stack, given its current state */
-function textHeight(state: ElementState): number {
-  // ponytail: truncated single-line text is given a tighter line-height (1.0x
-  // instead of 1.3x) so truncation genuinely frees vertical budget in the
-  // degradation loop — a simplification, not a real text-metrics model.
-  const lineHeight = state.truncated ? 1.0 : 1.3;
-  return (state.fontSize ?? 0) * lineHeight;
-}
+/* ==========================================================================
+   Degradation — priority-ordered, one step per pass
+   ========================================================================== */
 
-function elementHeight(state: ElementState): number {
-  if (state.spec.type === "text") return textHeight(state);
-  return state.height ?? 0;
-}
-
-function hasMoreStages(state: ElementState, ctx: ResolveContext): boolean {
+function hasMoreStages(state: ElementState, ctx: Ctx): boolean {
   if (!state.visible) return false;
   const spec = state.spec;
   switch (spec.type) {
     case "text": {
-      const floor = textFontFloor(spec, ctx);
-      if ((state.fontSize ?? floor) > floor) return true;
+      if ((state.fontSize ?? 0) > fontFloor(spec, ctx)) return true;
       if (spec.canTruncate && !state.truncated) return true;
       return spec.canDrop === true;
     }
     case "image": {
-      const w = state.width ?? 0;
-      const h = state.height ?? 0;
-      if (w > MIN_USABLE_IMAGE_PX && h > MIN_USABLE_IMAGE_PX) return true;
-      return spec.canDrop === true;
+      // The hero has no shrink ladder: it is elastic, so it either fits in
+      // what the copy leaves or it earns nothing and goes.
+      if (spec.role === "hero-image") return spec.canDrop === true;
+      return (state.height ?? 0) > MIN_USABLE_IMAGE_PX || spec.canDrop === true;
     }
     case "button":
       return spec.canDrop === true;
@@ -150,213 +443,96 @@ function hasMoreStages(state: ElementState, ctx: ResolveContext): boolean {
   }
 }
 
-function degradeOneStep(state: ElementState, ctx: ResolveContext, regionWidth: number, warnings: string[]): void {
+/** Applies exactly one degradation step and returns the trace line for it. */
+function degradeOneStep(state: ElementState, ctx: Ctx): string {
   const spec = state.spec;
   switch (spec.type) {
     case "text": {
-      const floor = textFontFloor(spec, ctx);
+      const floor = fontFloor(spec, ctx);
       const fontSize = state.fontSize ?? floor;
       if (fontSize > floor) {
-        state.fontSize = Math.max(floor, fontSize - SHRINK_STEP_PX);
-        warnings.push(`${spec.id}: font shrunk to ${state.fontSize}px`);
-        return;
+        const step = Math.max(1, Math.round(fontSize * FONT_SHRINK_RATIO));
+        state.fontSize = Math.max(floor, fontSize - step);
+        return `${spec.id}: type down to ${state.fontSize}px`;
       }
       if (spec.canTruncate && !state.truncated) {
         state.truncated = true;
-        state.displayContent = truncateToWidth(spec.content, fontSize, regionWidth);
-        warnings.push(`${spec.id}: truncated to fit ${Math.round(regionWidth)}px width`);
-        return;
+        return `${spec.id}: collapsed to one ellipsised line`;
       }
-      if (spec.canDrop) {
-        state.visible = false;
-        warnings.push(`${spec.id}: dropped (still overflows at floor size)`);
-      }
-      return;
+      state.visible = false;
+      return `${spec.id}: dropped — still overflows at the ${floor}px floor`;
     }
     case "image": {
-      const w = state.width ?? 0;
-      const h = state.height ?? 0;
-      if (w > MIN_USABLE_IMAGE_PX && h > MIN_USABLE_IMAGE_PX) {
-        state.width = Math.max(MIN_USABLE_IMAGE_PX, w * IMAGE_SHRINK_FACTOR);
-        state.height = Math.max(MIN_USABLE_IMAGE_PX, h * IMAGE_SHRINK_FACTOR);
-        warnings.push(`${spec.id}: shrunk to ${Math.round(state.width)}x${Math.round(state.height)}px`);
-        return;
-      }
-      if (spec.canDrop) {
+      if (spec.role === "hero-image") {
         state.visible = false;
-        warnings.push(`${spec.id}: dropped (still overflows at floor size)`);
+        return `${spec.id}: dropped — no usable image area left on this surface`;
       }
-      return;
+      const height = state.height ?? 0;
+      if (height > MIN_USABLE_IMAGE_PX) {
+        const next = Math.max(MIN_USABLE_IMAGE_PX, height * IMAGE_SHRINK_FACTOR);
+        state.height = next;
+        state.width = next * spec.aspectRatio;
+        return `${spec.id}: mark down to ${Math.round(next)}px`;
+      }
+      state.visible = false;
+      return `${spec.id}: dropped — below the smallest legible mark size`;
     }
     case "button": {
-      if (spec.canDrop) {
-        state.visible = false;
-        warnings.push(`${spec.id}: dropped (no room for button)`);
-      }
-      return;
+      state.visible = false;
+      return `${spec.id}: dropped — no room for the button`;
     }
     default:
-      assertNever(spec);
+      return assertNever(spec);
   }
 }
 
-interface LayoutResult {
-  placed: Map<string, Rect>;
-  regionOverflow: boolean;
-  brandingOverflow: boolean;
-}
-
-function rectsOverlap(a: Rect, b: Rect): boolean {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-}
-
-function cornerRect(corner: "br" | "tr" | "bl" | "tl", size: { width: number; height: number }, box: Rect): Rect {
-  const x = corner === "tr" || corner === "br" ? box.x + box.width - size.width : box.x;
-  const y = corner === "tl" || corner === "tr" ? box.y : box.y + box.height - size.height;
-  return { x, y, width: size.width, height: size.height };
-}
-
-/** Phase B (natural sizes) + Phase C (region packing), recomputed fresh each iteration. */
-function layout(states: Map<string, ElementState>, ctx: ResolveContext): LayoutResult {
-  const { contentBox, axisMode } = ctx;
-  const placed = new Map<string, Rect>();
-
-  const brandingState = [...states.values()].find((s) => s.spec.role === "branding" && s.visible);
-  const heroState = [...states.values()].find((s) => s.spec.role === "hero-image" && s.visible);
-  const stackStates = [...states.values()]
-    .filter((s) => s.visible && s.spec.role !== "branding" && s.spec.role !== "hero-image")
-    .sort((a, b) => a.spec.priority - b.spec.priority);
-
-  function packStack(list: ElementState[], rect: Rect): boolean {
-    let cursorY = rect.y;
-    let widthOverflow = false;
-    for (const s of list) {
-      const height = elementHeight(s);
-      // text fills the region width (block-level); image/button keep their own
-      // intrinsic size (already aspect-fit for images) and are centered so a
-      // capped-width hero doesn't stretch and distort.
-      const naturalWidth = s.spec.type === "text" ? rect.width : (s.width ?? rect.width);
-      if (naturalWidth > rect.width) widthOverflow = true;
-      const width = Math.min(naturalWidth, rect.width);
-      const x = s.spec.type === "text" ? rect.x : rect.x + (rect.width - width) / 2;
-      placed.set(s.spec.id, { x, y: cursorY, width, height });
-      cursorY += height + GAP;
-    }
-    const usedExtent = list.length > 0 ? cursorY - GAP - rect.y : 0;
-    return usedExtent > rect.height || widthOverflow;
-  }
-
-  let regionOverflow = false;
-
-  if (axisMode === "column") {
-    const all = heroState ? [heroState, ...stackStates] : stackStates;
-    all.sort((a, b) => a.spec.priority - b.spec.priority);
-    regionOverflow = packStack(all, contentBox);
-  } else if (axisMode === "row") {
-    let stackRect = contentBox;
-    if (heroState) {
-      const heroWidth = heroState.width ?? 0;
-      const heroHeight = heroState.height ?? 0;
-      const heroRect: Rect = {
-        x: contentBox.x,
-        y: contentBox.y + (contentBox.height - heroHeight) / 2,
-        width: heroWidth,
-        height: heroHeight,
-      };
-      placed.set(heroState.spec.id, heroRect);
-      stackRect = {
-        x: contentBox.x + heroWidth + GAP,
-        y: contentBox.y,
-        width: Math.max(0, contentBox.width - heroWidth - GAP),
-        height: contentBox.height,
-      };
-    }
-    regionOverflow = packStack(stackStates, stackRect);
-  } else {
-    const leftRect: Rect = {
-      x: contentBox.x,
-      y: contentBox.y,
-      width: contentBox.width * GRID_LEFT_COLUMN_FRACTION,
-      height: contentBox.height,
-    };
-    const rightRect: Rect = {
-      x: leftRect.x + leftRect.width + GAP,
-      y: contentBox.y,
-      width: contentBox.width - leftRect.width - GAP,
-      height: contentBox.height,
-    };
-    if (heroState) {
-      const size = { width: heroState.width ?? 0, height: heroState.height ?? 0 };
-      const x = leftRect.x + (leftRect.width - size.width) / 2;
-      const y = leftRect.y + (leftRect.height - size.height) / 2;
-      placed.set(heroState.spec.id, { x, y, width: size.width, height: size.height });
-    }
-    regionOverflow = packStack(stackStates, rightRect);
-  }
-
-  let brandingOverflow = false;
-  if (brandingState) {
-    const size = { width: brandingState.width ?? 0, height: brandingState.height ?? 0 };
-    const others = [...placed.values()];
-    let placedCorner: "br" | "tr" | "bl" | "tl" | undefined;
-    for (const corner of CORNER_ORDER) {
-      const rect = cornerRect(corner, size, contentBox);
-      const contained =
-        rect.x >= contentBox.x &&
-        rect.x + rect.width <= contentBox.x + contentBox.width &&
-        rect.y >= contentBox.y &&
-        rect.y + rect.height <= contentBox.y + contentBox.height;
-      if (contained && !others.some((o) => rectsOverlap(rect, o))) {
-        placedCorner = corner;
-        placed.set(brandingState.spec.id, rect);
-        break;
-      }
-    }
-    if (placedCorner) {
-      brandingState.corner = placedCorner;
-    } else {
-      brandingOverflow = true;
-      placed.set(brandingState.spec.id, cornerRect(brandingState.corner ?? "br", size, contentBox));
-    }
-  }
-
-  return { placed, regionOverflow, brandingOverflow };
-}
+/* ==========================================================================
+   Entry point
+   ========================================================================== */
 
 export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfile>): ResolvedLayout {
-  const contentBox: Rect = {
+  const box: Rect = {
     x: surface.safeArea.left,
     y: surface.safeArea.top,
     width: surface.width - surface.safeArea.left - surface.safeArea.right,
     height: surface.height - surface.safeArea.top - surface.safeArea.bottom,
   };
-  const aspect = contentBox.width / contentBox.height;
-  const axisMode: AxisMode = aspect >= AXIS_ROW_THRESHOLD ? "row" : aspect <= AXIS_COLUMN_THRESHOLD ? "column" : "grid2col";
 
-  const ctx: ResolveContext = {
-    contentBox,
-    axisMode,
+  const aspect = box.width / box.height;
+  const template: Template =
+    aspect >= BANNER_MIN_ASPECT ? "banner" : aspect >= SPLIT_MIN_ASPECT ? "split" : "stack";
+
+  const viewingScale = surface.viewingDistance === "far" ? FAR_VIEWING_TYPE_SCALE : 1;
+  const base = clamp(
+    Math.min((Math.sqrt(box.width * box.height) / TYPE_AREA_DIVISOR) * viewingScale, box.height / TYPE_HEIGHT_DIVISOR),
+    TYPE_MIN,
+    TYPE_MAX,
+  );
+
+  const ctx: Ctx = {
+    box,
+    template,
+    base,
+    gap: Math.round(clamp(base * GAP_RATIO, GAP_MIN, GAP_MAX)),
     tapFloor: surface.touchOnly ? surface.minTapTarget : 0,
     textFloor: surface.minTextSize ?? 0,
-    baseFontScale: surface.viewingDistance === "far" ? FAR_VIEWING_FONT_SCALE : 1,
   };
 
   const states = new Map<string, ElementState>();
-  for (const el of spec.elements) {
-    states.set(el.id, createState(el, ctx));
-  }
+  for (const el of spec.elements) states.set(el.id, createState(el, ctx));
 
   const warnings: string[] = [];
-  const maxIterations = spec.elements.length * 8 + 8;
-  let result = layout(states, ctx);
+  const maxIterations = spec.elements.length * 20 + 20;
+  let composition = compose(states, ctx);
   let iteration = 0;
 
-  while (result.regionOverflow || result.brandingOverflow) {
+  while (composition.overflow) {
     iteration += 1;
     if (iteration > maxIterations) {
       throw new Error(`resolve(): degradation loop did not converge for spec "${spec.id}" on surface "${surface.id}"`);
     }
 
+    // Least important first: highest priority *number* degrades first.
     const candidates = [...states.values()]
       .filter((s) => hasMoreStages(s, ctx))
       .sort((a, b) => b.spec.priority - a.spec.priority);
@@ -368,41 +544,46 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
     }
 
     const target = candidates[0];
-    const regionWidth = result.placed.get(target.spec.id)?.width ?? contentBox.width;
-    warnings.push(`iteration ${iteration}: degrading "${target.spec.id}" (priority ${target.spec.priority})`);
-    degradeOneStep(target, ctx, regionWidth, warnings);
-
-    result = layout(states, ctx);
+    warnings.push(`${iteration}. ${degradeOneStep(target, ctx)} (priority ${target.spec.priority})`);
+    composition = compose(states, ctx);
   }
 
+  const round = (n: number) => Math.round(n * 100) / 100;
   const elements: ResolvedElement[] = [];
   const droppedElementIds: string[] = [];
+
   for (const state of states.values()) {
     if (!state.visible) {
       droppedElementIds.push(state.spec.id);
       continue;
     }
-    const rect = result.placed.get(state.spec.id);
+    const rect = composition.placed.get(state.spec.id);
     if (!rect) continue;
-    const spec2 = state.spec;
-    const round = (n: number) => Math.round(n * 100) / 100;
-    const resolved: ResolvedElement = {
-      id: spec2.id,
-      role: spec2.role,
-      type: spec2.type,
+
+    const elSpec = state.spec;
+    const resolvedEl: ResolvedElement = {
+      id: elSpec.id,
+      role: elSpec.role,
+      type: elSpec.type,
       x: round(rect.x),
       y: round(rect.y),
       width: round(rect.width),
       height: round(rect.height),
     };
-    if (spec2.type === "text") {
-      resolved.fontSize = state.fontSize;
-      resolved.content = state.displayContent;
-      resolved.truncated = state.truncated ?? false;
-    } else if (spec2.type === "button") {
-      resolved.content = spec2.label;
+    if (elSpec.type === "text") {
+      const wrapped = composition.lines.get(elSpec.id) ?? [elSpec.content];
+      resolvedEl.fontSize = composition.fontSizes.get(elSpec.id) ?? state.fontSize;
+      resolvedEl.lines = wrapped;
+      resolvedEl.content = wrapped.join(" ");
+      resolvedEl.truncated = state.truncated ?? false;
+      resolvedEl.align = composition.align;
+    } else if (elSpec.type === "button") {
+      resolvedEl.fontSize = state.fontSize;
+      resolvedEl.content = elSpec.label;
+    } else if (elSpec.type === "image") {
+      resolvedEl.src = elSpec.src;
     }
-    elements.push(resolved);
+    elements.push(resolvedEl);
   }
 
   const resolved: ResolvedLayout = {
@@ -410,6 +591,7 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
     specId: spec.id,
     surfaceWidth: surface.width,
     surfaceHeight: surface.height,
+    template,
     elements,
     droppedElementIds,
     warnings,
@@ -417,7 +599,9 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
 
   const violations = checkInvariants(resolved, surface, spec);
   if (violations.length > 0) {
-    throw new Error(`resolve(): invariant violation(s) for spec "${spec.id}" on surface "${surface.id}":\n  - ${violations.join("\n  - ")}`);
+    throw new Error(
+      `resolve(): invariant violation(s) for spec "${spec.id}" on surface "${surface.id}":\n  - ${violations.join("\n  - ")}`,
+    );
   }
 
   return resolved;

@@ -75,14 +75,15 @@ export const broadcastLowerThird: Validated<SurfaceProfile> = defineSurfaceProfi
   viewingDistance: "far",
 });
 
-// Insets tuned so the kiosk's own reserved instruction/QR chrome bar
-// naturally cramps the content box enough to trigger branding degradation
-// on this preset itself, matching the assignment's own worked example.
+// Bottom inset reserves the kiosk's own instruction/QR chrome bar; the rest is
+// an even bezel. (These were previously 445px top and bottom, which left a
+// 1000x190 strip inside a 1080x1080 screen purely to force a degradation step
+// in the demo — the engine now earns that step on compactWidget instead.)
 export const retailKiosk: Validated<SurfaceProfile> = defineSurfaceProfile({
   id: "retailKiosk",
   width: 1080,
   height: 1080,
-  safeArea: { top: 445, right: 40, bottom: 445, left: 40 },
+  safeArea: { top: 72, right: 72, bottom: 200, left: 72 },
   touchOnly: true,
   minTapTarget: 60,
   minTextSize: 18,
