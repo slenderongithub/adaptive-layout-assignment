@@ -31,7 +31,7 @@ export function buildAdSpec(model: JacketModel) {
         priority: 1,
         canDrop: false,
         canTruncate: false,
-        content: "Built for Every Element.",
+        content: model.headline,
       },
       {
         id: "price",
@@ -40,7 +40,7 @@ export function buildAdSpec(model: JacketModel) {
         priority: 2,
         canDrop: true,
         canTruncate: false,
-        content: "$248.00",
+        content: model.price,
       },
       {
         id: "secondary",
@@ -49,7 +49,7 @@ export function buildAdSpec(model: JacketModel) {
         priority: 4,
         canDrop: true,
         canTruncate: true,
-        content: "Waterproof shell. Packs into its own pocket. Free returns.",
+        content: model.description,
       },
       {
         id: "cta",

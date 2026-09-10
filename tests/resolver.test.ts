@@ -137,7 +137,24 @@ describe("composition", () => {
   });
 
   it("wraps copy to the column it was given, so nothing is silently clipped", () => {
-    const layout = resolve(jacketAdSpec, surfaceById("mobilePortrait"));
+    // A headline long enough to force a wrap, independent of whatever the
+    // demo's product copy happens to say.
+    const wrapSpec = defineAdSpec({
+      id: "wrap-test",
+      elements: [
+        {
+          id: "headline",
+          type: "text",
+          role: "headline",
+          priority: 1,
+          canDrop: false,
+          canTruncate: false,
+          content: "Built for Every Element.",
+        },
+        { id: "cta", type: "button", role: "cta", priority: 1, canDrop: false, label: "Shop Now" },
+      ],
+    });
+    const layout = resolve(wrapSpec, surfaceById("mobilePortrait"));
     const headline = layout.elements.find((e) => e.id === "headline")!;
     expect(headline.lines!.length).toBeGreaterThan(1);
     expect(headline.lines!.join(" ")).toBe("Built for Every Element.");
@@ -168,11 +185,21 @@ describe("degradation", () => {
   });
 
   it("leaves the roomy presets untouched", () => {
-    for (const id of ["mobilePortrait", "mobileLandscape", "retailKiosk", "broadcastLowerThird"]) {
+    for (const id of ["mobilePortrait", "mobileLandscape", "retailKiosk"]) {
       const layout = resolve(jacketAdSpec, surfaceById(id));
       expect(layout.droppedElementIds).toEqual([]);
       expect(layout.warnings).toEqual([]);
     }
+  });
+
+  it("shrinks branding, but drops nothing, on the widest/shortest preset with the demo's full-length copy", () => {
+    // broadcastLowerThird's description now wraps to more lines than the old
+    // ~60-character placeholder did — real content, so real degradation:
+    // the lowest-priority element (branding) gives a little ground, nothing
+    // drops, and no invariant is violated.
+    const layout = resolve(jacketAdSpec, surfaceById("broadcastLowerThird"));
+    expect(layout.droppedElementIds).toEqual([]);
+    expect(layout.warnings.every((w) => w.includes("branding"))).toBe(true);
   });
 });
 
