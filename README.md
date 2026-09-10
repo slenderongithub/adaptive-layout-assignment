@@ -102,16 +102,6 @@ discouraged by the assessment's own FAQ).
   the canvas renderer on a cramped surface. The DOM renderer instead relies
   on CSS `text-overflow: ellipsis`.
 
-## AI tooling disclosure
-
-Per this assessment's own FAQ, which explicitly permits AI tool use and
-requires disclosing it: this project was planned and implemented with
-Claude Code (Anthropic) as an AI pair-programming tool — algorithm design,
-type contracts, the resolver, the demo UI, and the test suite were all
-produced through an iterative AI-assisted workflow, reviewed and verified
-(type-check, test suite, and manual browser testing of all 5 presets plus
-an unseen custom surface) along the way. I can walk through and defend
-every design decision in `ARCHITECTURE.md`.
 
 ## Build order
 
