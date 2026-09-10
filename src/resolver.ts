@@ -8,7 +8,11 @@ import type { Rect, ResolvedElement, ResolvedLayout, Template } from "./types";
    box — there are no per-surface special cases anywhere below this block.
    ========================================================================== */
 
-/** Template is chosen from the content box's aspect ratio, nothing else. */
+/**
+ * Template is chosen from the content box's aspect ratio — gated by whether
+ * the box is even big enough to split at all; see MIN_SPLIT_HERO_WIDTH and
+ * `canSplitHorizontally` in resolve().
+ */
 const SPLIT_MIN_ASPECT = 0.95;
 const BANNER_MIN_ASPECT = 2.2;
 
@@ -88,6 +92,43 @@ const BANNER_HERO_MAX_WIDTH_FRACTION = 0.22;
 /** The copy column never yields more than this to the hero. */
 const MIN_TEXT_COLUMN_PX = 120;
 const MIN_TEXT_COLUMN_FRACTION = 0.35;
+/**
+ * The feasibility floor for CHOOSING a side-by-side template, not the
+ * degradation floor for abandoning one already in progress. HERO_MIN_PX
+ * (56) is "still worth keeping once we're already committed to split" — it
+ * lets a hero shrink that far before giving up on it. This is the higher
+ * bar for "worth arranging side by side at all": a fresh hero column
+ * narrower than this reads as a sliver, not a product photo, so a surface
+ * too narrow to give it at least this much (plus a gap and a legible text
+ * column) composes as `stack` instead, no matter what its aspect ratio says.
+ */
+const MIN_SPLIT_HERO_WIDTH = 96;
+
+function minTextColumnFor(boxWidth: number): number {
+  return Math.max(MIN_TEXT_COLUMN_PX, boxWidth * MIN_TEXT_COLUMN_FRACTION);
+}
+
+/* ---- micro template ------------------------------------------------------
+   `stack`'s copy-first ordering (copy claims its natural height, hero takes
+   whatever's left) assumes there's normally enough height for both. Below
+   MICRO_MAX_DIM in *both* dimensions that assumption breaks: the copy
+   block's own floors (TYPE_MIN, the surface's minTextSize) already consume
+   most of a box this small, so "leftover" for the hero rounds to nothing.
+   A watch face isn't a shrunken phone screen — it's a different form factor
+   with a different composition rule, so below this size the hero claims a
+   fixed dominant share of the height *first*, and the copy is split into a
+   two-column bottom bar sized from whatever remains. */
+const MICRO_MAX_DIM = 260;
+const HERO_DOMINANT_SHARE = 0.75;
+/**
+ * The bottom bar is only viable as *two* columns if the box is wide enough
+ * to give the CTA its own non-negotiable minimum width (CTA_MIN_WIDTH) and
+ * still leave the headline column something to work with. Narrower than
+ * this, forcing a side-by-side bar is the same mistake `canSplitHorizontally`
+ * already guards against at the top level — a sliver instead of a real
+ * feasibility check — so those surfaces stay on the plain `stack` template.
+ */
+const MICRO_MIN_LEFT_COLUMN_WIDTH = 60;
 
 /* ---- degradation -------------------------------------------------------- */
 const FONT_SHRINK_RATIO = 0.12;
@@ -190,6 +231,9 @@ interface Ctx {
   gap: number;
   tapFloor: number;
   textFloor: number;
+  /** micro template only: the hero/bottom-bar vertical split. */
+  heroHeight?: number;
+  barHeight?: number;
 }
 
 function fontFloor(spec: Extract<ElementSpec, { type: "text" }>, ctx: Ctx): number {
@@ -253,7 +297,102 @@ function readingIndex(state: ElementState): number {
   return i === -1 ? READING_ORDER.length : i;
 }
 
+/**
+ * Micro template: the hero claims `ctx.heroHeight` across the full width
+ * first — computed in resolve(), not here, because it has to be known
+ * before element font sizes are (the bottom bar's real size is what the
+ * text scales against) — then the copy splits into two columns inside
+ * `ctx.barHeight`: headline + secondary on the left, price + CTA on the
+ * right. This is the one template where a *role*, not a priority number,
+ * drives the composition — the same way `banner` already special-cases the
+ * CTA into its own column regardless of its priority value.
+ *
+ * Branding gets no slot at all: it's flagged as overflow unconditionally so
+ * the ordinary priority loop — where it is priority 5, the lowest, and so
+ * always the first candidate — drops it on the first pass. Same mechanism
+ * every other template relies on (an overflow flag driving degradation),
+ * just asserted directly here because there's no placement to measure a
+ * mark against when it was never given a slot in the first place.
+ */
+function composeMicro(states: Map<string, ElementState>, ctx: Ctx): Composition {
+  const { box, gap, heroHeight = 0, barHeight = 0 } = ctx;
+  const visible = [...states.values()].filter((s) => s.visible);
+  const hero = visible.find((s) => s.spec.role === "hero-image");
+  const branding = visible.find((s) => s.spec.role === "branding");
+  const headline = visible.find((s) => s.spec.role === "headline");
+  const secondary = visible.find((s) => s.spec.role === "secondary");
+  const price = visible.find((s) => s.spec.role === "price");
+  const cta = visible.find((s) => s.spec.role === "cta");
+
+  const placed = new Map<string, Rect>();
+  const lines = new Map<string, string[]>();
+  const fontSizes = new Map<string, number>();
+  let overflow = Boolean(branding);
+
+  if (hero) {
+    placed.set(hero.spec.id, { x: box.x, y: box.y, width: box.width, height: heroHeight });
+  }
+
+  const barY = box.y + heroHeight + gap;
+
+  // The right column is sized to what the CTA actually needs (it has a
+  // non-negotiable minimum width, CTA_MIN_WIDTH, that a flat 50/50 split
+  // can clip on a narrow box), not an even half — the left column gets
+  // whatever that leaves, down to MICRO_MIN_LEFT_COLUMN_WIDTH (the same
+  // floor resolve() used to decide micro was viable at all — see
+  // `canMicroSplit`). Content-driven, the same principle as the
+  // split/banner hero column, just applied to the bottom bar.
+  const rightColWidth = Math.min(Math.max(cta?.width ?? 0, box.width * 0.3), box.width - gap - MICRO_MIN_LEFT_COLUMN_WIDTH);
+  const leftColWidth = box.width - gap - rightColWidth;
+  if (leftColWidth < MICRO_MIN_LEFT_COLUMN_WIDTH - 0.5 || rightColWidth < (cta?.width ?? 0) - 0.5) overflow = true;
+
+  const layoutColumn = (items: (ElementState | undefined)[], x: number, colWidth: number) => {
+    const built: BlockItem[] = [];
+    for (const state of items) {
+      if (!state) continue;
+      const spec = state.spec;
+      if (spec.type === "text") {
+        const floor = fontFloor(spec, ctx);
+        let fontSize = state.fontSize ?? floor;
+        let ls = state.truncated
+          ? [ellipsize(spec.content, fontSize, colWidth, spec.role)]
+          : wrapText(spec.content, fontSize, colWidth, spec.role);
+        while (spec.role === "headline" && !state.truncated && ls.length > MAX_HEADLINE_LINES && fontSize > floor) {
+          fontSize -= 1;
+          ls = wrapText(spec.content, fontSize, colWidth, spec.role);
+        }
+        const widest = Math.max(...ls.map((l) => measureText(l, fontSize, spec.role)));
+        if (widest > colWidth + 0.5) overflow = true;
+        built.push({ state, width: colWidth, height: ls.length * fontSize * LINE_HEIGHT, lines: ls, fontSize });
+      } else if (spec.type === "button") {
+        const width = Math.min(state.width ?? 0, colWidth);
+        const height = state.height ?? 0;
+        if ((state.width ?? 0) > colWidth + 0.5) overflow = true;
+        built.push({ state, width, height });
+      }
+    }
+
+    const total = built.reduce((sum, it, i) => sum + it.height + (i < built.length - 1 ? gap : 0), 0);
+    if (total > barHeight + 0.1) overflow = true;
+    let y = barY + Math.max(0, (barHeight - total) / 2);
+    for (const it of built) {
+      const height = Math.min(it.height, barHeight);
+      placed.set(it.state.spec.id, { x, y, width: it.width, height });
+      if (it.lines) lines.set(it.state.spec.id, it.lines);
+      if (it.fontSize !== undefined) fontSizes.set(it.state.spec.id, it.fontSize);
+      y += height + gap;
+    }
+  };
+
+  layoutColumn([headline, secondary], box.x, leftColWidth);
+  layoutColumn([price, cta], box.x + leftColWidth + gap, rightColWidth);
+
+  return { placed, lines, fontSizes, align: "left", overflow };
+}
+
 function compose(states: Map<string, ElementState>, ctx: Ctx): Composition {
+  if (ctx.template === "micro") return composeMicro(states, ctx);
+
   const { box, template, gap } = ctx;
   const visible = [...states.values()].filter((s) => s.visible);
   const hero = visible.find((s) => s.spec.role === "hero-image");
@@ -261,7 +400,7 @@ function compose(states: Map<string, ElementState>, ctx: Ctx): Composition {
   const cta = visible.find((s) => s.spec.role === "cta");
 
   const align: "left" | "center" = template === "stack" ? "center" : "left";
-  const minTextColumn = Math.max(MIN_TEXT_COLUMN_PX, box.width * MIN_TEXT_COLUMN_FRACTION);
+  const minTextColumn = minTextColumnFor(box.width);
   let overflow = false;
 
   /* -- 1. carve the columns ------------------------------------------------
@@ -379,7 +518,10 @@ function compose(states: Map<string, ElementState>, ctx: Ctx): Composition {
       }
     }
     const total = blockHeight + (hero ? heroHeight + gap : 0);
-    if (total > box.height + 0.5) overflow = true;
+    // Tight on purpose: checkInvariants() allows only ~0.01px of slack, so a
+    // looser tolerance here can let a composition through as "fits" that
+    // then renders a hair past the box edge — a real, if tiny, clip.
+    if (total > box.height + 0.1) overflow = true;
     let y = box.y + Math.max(0, (box.height - total) / 2);
     if (hero) {
       placed.set(hero.spec.id, {
@@ -392,7 +534,7 @@ function compose(states: Map<string, ElementState>, ctx: Ctx): Composition {
     }
     putBlock(box.x, y, box.width);
   } else {
-    if (blockHeight > box.height + 0.5) overflow = true;
+    if (blockHeight > box.height + 0.1) overflow = true;
     if (hero) {
       placed.set(hero.spec.id, {
         x: box.x,
@@ -432,8 +574,12 @@ function hasMoreStages(state: ElementState, ctx: Ctx): boolean {
     }
     case "image": {
       // The hero has no shrink ladder: it is elastic, so it either fits in
-      // what the copy leaves or it earns nothing and goes.
-      if (spec.role === "hero-image") return spec.canDrop === true;
+      // what the copy leaves or it earns nothing and goes. In `micro` it
+      // doesn't even earn-or-go: the whole point of that template is a
+      // guaranteed dominant share for the hero (see resolve()), so it is
+      // never a degradation candidate there — everything else in the copy
+      // block, including price, is what gives way under extreme constraint.
+      if (spec.role === "hero-image") return ctx.template !== "micro" && spec.canDrop === true;
       return (state.height ?? 0) > MIN_USABLE_IMAGE_PX || spec.canDrop === true;
     }
     case "button":
@@ -498,24 +644,142 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
     height: surface.height - surface.safeArea.top - surface.safeArea.bottom,
   };
 
-  const aspect = box.width / box.height;
-  const template: Template =
-    aspect >= BANNER_MIN_ASPECT ? "banner" : aspect >= SPLIT_MIN_ASPECT ? "split" : "stack";
-
+  // base/gap depend only on the box, never on the template, so they can be
+  // computed before the template is chosen and used to decide it.
   const viewingScale = surface.viewingDistance === "far" ? FAR_VIEWING_TYPE_SCALE : 1;
   const base = clamp(
     Math.min((Math.sqrt(box.width * box.height) / TYPE_AREA_DIVISOR) * viewingScale, box.height / TYPE_HEIGHT_DIVISOR),
     TYPE_MIN,
     TYPE_MAX,
   );
+  const gap = Math.round(clamp(base * GAP_RATIO, GAP_MIN, GAP_MAX));
+
+  /**
+   * Aspect ratio alone picks banner/split/stack, but aspect says nothing
+   * about absolute size: a perfect square at 2000px and one at 200px have
+   * the same ratio, yet only one has room to put a hero next to copy. A
+   * split/banner is only viable if the box can give the hero its feasibility
+   * floor AND the copy its minimum legible column, side by side; if it
+   * can't, no aspect ratio makes that a good idea, so the composition falls
+   * back to stack (hero on top, copy below) instead of forcing a sliver.
+   */
+  const canSplitHorizontally = box.width >= MIN_SPLIT_HERO_WIDTH + gap + minTextColumnFor(box.width);
+  const aspect = box.width / box.height;
+  let template: Template = !canSplitHorizontally
+    ? "stack"
+    : aspect >= BANNER_MIN_ASPECT
+      ? "banner"
+      : aspect >= SPLIT_MIN_ASPECT
+        ? "split"
+        : "stack";
+
+  const tapFloor = surface.touchOnly ? surface.minTapTarget : 0;
+  const textFloor = surface.minTextSize ?? 0;
+
+  // Size, not shape: a box that would otherwise stack (too narrow/tall to
+  // split) but is small in *both* dimensions gets the hero-dominant micro
+  // template instead — see the MICRO_MAX_DIM comment above — provided it can
+  // actually fit the bar's two columns side by side (MICRO_MIN_LEFT_COLUMN_WIDTH
+  // above); otherwise plain `stack` remains the honest answer.
+  const canMicroSplit = box.width >= CTA_MIN_WIDTH + gap + MICRO_MIN_LEFT_COLUMN_WIDTH;
+  if (template === "stack" && canMicroSplit && box.width <= MICRO_MAX_DIM && box.height <= MICRO_MAX_DIM) {
+    template = "micro";
+  }
+
+  let effectiveBase = base;
+  let effectiveGap = gap;
+  let heroHeight: number | undefined;
+  let barHeight: number | undefined;
+
+  if (template === "micro") {
+    // Pass 1: split the height using the full-box gap as a stand-in, just
+    // to get a bar size to size text against.
+    const provisionalBarHeight = box.height - Math.round(box.height * HERO_DOMINANT_SHARE) - gap;
+    const colWidth = (box.width - gap) / 2;
+    // Text in the bar scales off the bar it will actually occupy, not the
+    // full box — the same continuous formula as everywhere else (see
+    // `base` above), just fed the smaller region. `fontFloor()` still
+    // enforces textFloor as a hard minimum on top of this.
+    effectiveBase = clamp(
+      Math.min(
+        (Math.sqrt(colWidth * provisionalBarHeight) / TYPE_AREA_DIVISOR) * viewingScale,
+        provisionalBarHeight / TYPE_HEIGHT_DIVISOR,
+      ),
+      TYPE_MIN,
+      TYPE_MAX,
+    );
+    effectiveGap = Math.round(clamp(effectiveBase * GAP_RATIO, GAP_MIN, GAP_MAX));
+
+    // Pass 2: final split with the refined gap, then guarantee the bar
+    // never ends up shorter than what the undroppable headline (at the
+    // surface's real text floor) and CTA (at its real tap-target floor)
+    // need — real per-surface minimums, not a guess — even if that means
+    // giving up some of the hero's dominant share to get it.
+    const headlineSpec = spec.elements.find((e) => e.role === "headline");
+    const headlineFloor = Math.max(
+      textFloor,
+      TYPE_MIN,
+      headlineSpec?.type === "text" ? (headlineSpec.minFontSize ?? 0) : 0,
+    );
+    // Matches createState()'s own cta sizing exactly (same formula, same
+    // rounding), computed here rather than waited for because the left
+    // column's real width — what the headline actually has to fit — depends
+    // on it. See composeMicro for the width split this mirrors.
+    const ctaSpec = spec.elements.find((e) => e.role === "cta");
+    const ctaFontSize = Math.round(clamp(effectiveBase * CTA_FONT_RATIO, CTA_FONT_MIN, CTA_FONT_MAX));
+    const ctaPadX = ctaFontSize * CTA_PAD_RATIO;
+    const ctaWidth =
+      ctaSpec?.type === "button"
+        ? Math.max(CTA_MIN_WIDTH, tapFloor, Math.round(measureText(ctaSpec.label, ctaFontSize, "cta") + ctaPadX * 2))
+        : CTA_MIN_WIDTH;
+    const ctaHeight = Math.max(tapFloor, Math.round(ctaFontSize * CTA_HEIGHT_RATIO));
+    const rightColWidth = Math.min(
+      Math.max(ctaWidth, box.width * 0.3),
+      box.width - effectiveGap - MICRO_MIN_LEFT_COLUMN_WIDTH,
+    );
+    const leftColWidth = box.width - effectiveGap - rightColWidth;
+
+    // Measured, not assumed: at the floor size there's no shrinking left to
+    // give, so however many lines the real copy actually wraps to in the
+    // real left column IS the height the bar must have room for.
+    const headlineWrapped =
+      headlineSpec?.type === "text" ? wrapText(headlineSpec.content, headlineFloor, leftColWidth, "headline") : [""];
+    const headlineLines = headlineWrapped.length;
+    // A word the wrapper couldn't break is a hard wall, not a height
+    // problem: the headline can't shrink below its floor or truncate in
+    // this spec, so no amount of extra bar height fixes an unbreakable word
+    // wider than the column itself.
+    const headlineWidest = Math.max(...headlineWrapped.map((l) => measureText(l, headlineFloor, "headline")));
+    const minBarHeight = Math.max(headlineLines * headlineFloor * LINE_HEIGHT, ctaHeight);
+
+    // If even giving the bar everything except a bare-minimum hero still
+    // can't cover minBarHeight, or the headline simply can't fit the
+    // column's width at its floor size, a squeezed two-column bar is the
+    // wrong tool for this combination (typically a demanding minTextSize
+    // forcing many/wide wrapped lines in a half-width column) — a
+    // full-width `stack`, where text wraps against the whole box instead of
+    // half of it, handles it better, so fall back to that rather than
+    // forcing an infeasible split.
+    if (minBarHeight > box.height - effectiveGap - HERO_MIN_PX || headlineWidest > leftColWidth + 0.5) {
+      template = "stack";
+      effectiveBase = base;
+      effectiveGap = gap;
+    } else {
+      barHeight = Math.max(box.height - Math.round(box.height * HERO_DOMINANT_SHARE) - effectiveGap, 0);
+      barHeight = Math.max(barHeight, minBarHeight);
+      heroHeight = box.height - effectiveGap - barHeight;
+    }
+  }
 
   const ctx: Ctx = {
     box,
     template,
-    base,
-    gap: Math.round(clamp(base * GAP_RATIO, GAP_MIN, GAP_MAX)),
-    tapFloor: surface.touchOnly ? surface.minTapTarget : 0,
-    textFloor: surface.minTextSize ?? 0,
+    base: effectiveBase,
+    gap: effectiveGap,
+    tapFloor,
+    textFloor,
+    heroHeight,
+    barHeight,
   };
 
   const states = new Map<string, ElementState>();

@@ -5,8 +5,12 @@ import type { ElementRole, ElementType } from "./spec";
  *  - stack:  one vertical column, hero above the copy (portrait-ish)
  *  - split:  hero in one column, copy + CTA in the other (squarish / landscape)
  *  - banner: hero | copy | CTA, three columns side by side (very wide strips)
+ *  - micro:  hero spans the top at a fixed dominant share of the height, a
+ *            tight bottom bar splits into a copy column and a price/CTA
+ *            column (surfaces too small, in both dimensions, for `stack`'s
+ *            copy-first ordering to leave the hero anything but a sliver)
  */
-export type Template = "stack" | "split" | "banner";
+export type Template = "stack" | "split" | "banner" | "micro";
 
 export interface ResolvedElement {
   id: string;

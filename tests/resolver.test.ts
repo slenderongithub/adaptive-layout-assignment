@@ -254,6 +254,124 @@ describe("unseen surfaces (fuzzing the template thresholds)", () => {
   });
 });
 
+describe("template capacity gate", () => {
+  // Aspect ratio alone can't tell a 220px square from a 2000px one, but only
+  // one has room to put a hero column next to a legible text column. A
+  // surface too narrow for that must fall back to stack (or, if it's small
+  // in both dimensions, micro) no matter its aspect, instead of forcing a
+  // hero/text sliver that's technically non-overlapping but useless.
+  const squareOfSize = (size: number) =>
+    defineSurfaceProfile({
+      id: `square-${size}`,
+      width: size,
+      height: size,
+      safeArea: { top: 10, right: 10, bottom: 10, left: 10 },
+      touchOnly: true,
+      minTapTarget: 44,
+      minTextSize: 14,
+    });
+
+  it("falls back to micro when a square is too small to split", () => {
+    const layout = resolve(jacketAdSpec, squareOfSize(220));
+    expect(layout.template).toBe("micro");
+    expect(checkInvariants(layout, squareOfSize(220), jacketAdSpec)).toEqual([]);
+  });
+
+  it("still splits a square of the same aspect once it's wide enough", () => {
+    const layout = resolve(jacketAdSpec, squareOfSize(300));
+    expect(layout.template).toBe("split");
+    expect(checkInvariants(layout, squareOfSize(300), jacketAdSpec)).toEqual([]);
+  });
+
+  it("falls back to plain stack, not micro, when only one dimension is small", () => {
+    // Too narrow to split (aspect says stack anyway), but tall enough that
+    // it isn't the cramped, both-dimensions-tiny case micro exists for.
+    const tallNarrow = defineSurfaceProfile({
+      id: "tall-narrow-300x700",
+      width: 300,
+      height: 700,
+      safeArea: { top: 10, right: 10, bottom: 10, left: 10 },
+      touchOnly: false,
+      minTextSize: 12,
+    });
+    const layout = resolve(jacketAdSpec, tallNarrow);
+    expect(layout.template).toBe("stack");
+    expect(checkInvariants(layout, tallNarrow, jacketAdSpec)).toEqual([]);
+  });
+});
+
+describe("micro template", () => {
+  const microSquare = () =>
+    defineSurfaceProfile({
+      id: "micro-square",
+      width: 220,
+      height: 220,
+      safeArea: { top: 10, right: 10, bottom: 10, left: 10 },
+      touchOnly: true,
+      minTapTarget: 44,
+      minTextSize: 14,
+    });
+
+  it("gives the hero a dominant share of the height, top-aligned across the full width", () => {
+    const surface = microSquare();
+    const layout = resolve(jacketAdSpec, surface);
+    const box = { x: 10, y: 10, width: 200, height: 200 };
+    const hero = layout.elements.find((e) => e.id === "hero")!;
+    expect(hero.y).toBeCloseTo(box.y, 5);
+    expect(hero.width).toBeCloseTo(box.width, 5);
+    expect(hero.height / box.height).toBeGreaterThan(0.6);
+  });
+
+  it("never drops the hero to make room for lower-priority copy", () => {
+    // The hero has no numeric priority advantage in this spec (price and
+    // headline/cta outrank it), but micro is the one template where the
+    // hero's role, not its priority number, protects it — see
+    // hasMoreStages(). Branding/secondary/price give way first.
+    const layout = resolve(jacketAdSpec, microSquare());
+    expect(layout.droppedElementIds).not.toContain("hero");
+  });
+
+  it("places copy bottom-left and price/CTA bottom-right, both below the hero", () => {
+    const layout = resolve(jacketAdSpec, microSquare());
+    const hero = layout.elements.find((e) => e.id === "hero")!;
+    const headline = layout.elements.find((e) => e.id === "headline")!;
+    const cta = layout.elements.find((e) => e.id === "cta")!;
+    expect(headline.y).toBeGreaterThanOrEqual(hero.y + hero.height);
+    expect(cta.y).toBeGreaterThanOrEqual(hero.y + hero.height);
+    expect(headline.x).toBeLessThan(cta.x);
+  });
+
+  it("sizes bar text off the bar itself — smaller than a roomier surface's headline, when the surface's own floor allows it", () => {
+    // With minTextSize unset on both, the bar-local base is free to land
+    // below what a full-box `stack` would have produced for the same
+    // content, since nothing else is floor-clamping it up.
+    const roomyStack = defineSurfaceProfile({
+      id: "roomy-stack",
+      width: 220,
+      height: 900,
+      safeArea: { top: 10, right: 10, bottom: 10, left: 10 },
+      touchOnly: false,
+    });
+    const microNoFloor = defineSurfaceProfile({
+      id: "micro-no-floor",
+      width: 220,
+      height: 220,
+      safeArea: { top: 10, right: 10, bottom: 10, left: 10 },
+      touchOnly: false,
+    });
+    const roomy = resolve(jacketAdSpec, roomyStack).elements.find((e) => e.role === "headline")!.fontSize!;
+    const micro = resolve(jacketAdSpec, microNoFloor).elements.find((e) => e.role === "headline")!.fontSize!;
+    expect(micro).toBeLessThan(roomy);
+  });
+
+  it("still honours the surface's minTextSize as a hard floor in the bar", () => {
+    const layout = resolve(jacketAdSpec, microSquare());
+    for (const el of layout.elements) {
+      if (el.type === "text") expect(el.fontSize).toBeGreaterThanOrEqual(14);
+    }
+  });
+});
+
 it("throws a documented pathological error when undroppable elements cannot fit", () => {
   const tiny = defineSurfaceProfile({
     id: "tiny",

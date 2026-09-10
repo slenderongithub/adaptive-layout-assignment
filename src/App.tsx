@@ -15,7 +15,7 @@ import { mobilePortrait, type SurfaceProfile } from "./surfaces";
 import type { ResolvedLayout } from "./types";
 
 const PREVIEW_WIDTH = 860;
-const PREVIEW_HEIGHT = 520;
+const PREVIEW_HEIGHT = 640;
 /**
  * Cap on preview magnification. At 2x a 300x100 widget was blown up larger
  * than the 1920px broadcast strip beside it, which made the set read as

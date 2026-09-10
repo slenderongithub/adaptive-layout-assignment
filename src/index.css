@@ -626,19 +626,23 @@ textarea {
 }
 
 /* --- debug panel -------------------------------------------------------- */
-/* Grows to fill the stretched column so its bottom edge always lands level
-   with the stage column, instead of stopping short whenever the trace is
-   shorter than the preview. Scrolls internally if a trace ever runs long. */
+/* Grows to fill the pinned column height so its bottom edge always lands
+   level with the stage column. Internally a flex column of its own: the
+   head and the decision trace sit at natural size, the raw-JSON section
+   takes whatever's left over — so the taller the column gets, the more
+   room the JSON well gets, instead of sitting capped at a fixed height. */
 .debug-panel {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .debug-head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  flex: none;
 }
 
 .debug-title {
@@ -657,6 +661,8 @@ textarea {
 .debug-body {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   gap: var(--space-6);
   margin-top: var(--space-4);
 }
@@ -677,9 +683,18 @@ textarea {
   color: var(--ink-muted);
 }
 
-/* Own hard cap regardless of the column-height match above, so a pathological
-   dump scrolls inside the well instead of pushing the panel taller. */
+/* The one section allowed to grow — its pre fills whatever height that
+   leaves, and scrolls internally if the dump still doesn't fit. */
+.debug-raw {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 96px;
+}
+
 .debug-body pre {
+  flex: 1;
+  min-height: 0;
   margin: 0;
   padding: var(--space-4);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -687,7 +702,6 @@ textarea {
   background: var(--code-bg);
   color: var(--code-ink);
   font: 13px/1.6 ui-monospace, monospace;
-  max-height: 176px;
   overflow: auto;
 }
 

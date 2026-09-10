@@ -79,6 +79,23 @@ discouraged by the assessment's own FAQ).
   in every cramped-surface demo even when the real pressure is a text stack
   it isn't part of — simple and deterministic beats "figure out which
   element is actually the problem."
+- **`split`/`banner` have no fallback for an unbreakable headline word.** The
+  demo spec's headline is deliberately undroppable and untruncatable (it
+  auto-fits to 2 lines instead), so if a narrow `split`/`banner` copy column
+  meets an unusually large `minTextSize`, a single word can end up wider
+  than the column at the mandatory floor size with nowhere left to shrink —
+  the resolver correctly throws rather than silently clipping, but it can't
+  recompose around it. Confirmed independent of any other change: a
+  240×120 touch surface with `minTextSize: 22` hits this in isolation.
+  The new `micro` template (surfaces small in both dimensions, e.g. a
+  220×220 "watch face") *does* guard against this — it measures the actual
+  wrap width against the real column before committing, and falls back to a
+  full-width `stack` if the split can't fit — `split`/`banner` don't yet have
+  the equivalent check. Fixing it means generalizing that same
+  measure-before-committing guard to the other two templates; scoped out
+  here as a targeted, deliberately small change rather than reworking two
+  well-tested code paths for a combination no preset or the assignment's own
+  test surfaces ever produce.
 - **Canvas renderer text fit.** `CanvasRenderingContext2D.fillText`'s
   `maxWidth` argument horizontally compresses text that doesn't fit rather
   than truncating it — a native canvas API quirk, visible if you toggle to
