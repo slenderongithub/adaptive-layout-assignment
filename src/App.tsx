@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { readAdPalette } from "./adPalette";
 import { buildAdSpec } from "./adSpec";
 import { AnimatedThemeToggler } from "./components/ui/animated-theme-toggler";
+import { Segmented } from "./components/Segmented";
 import { SilkBackground } from "./components/SilkBackground";
 import { DebugPanel } from "./DebugPanel";
 import { defaultJacketModel, jacketModels } from "./models";
@@ -36,6 +37,27 @@ function usePersistedTheme(): ["light" | "dark", (t: "light" | "dark") => void] 
   return [theme, setTheme];
 }
 
+/**
+ * Tracks an element's rendered height so a sibling column can be pinned to
+ * it — the controls column's content length varies with the surface (trace
+ * steps, dropped-element count), the stage column's doesn't, so the stage
+ * column is the one to measure and the other is the one to pin.
+ */
+function useMeasuredHeight<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [height, setHeight] = useState<number>();
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setHeight(entry.contentRect.height));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, height] as const;
+}
+
 function CanvasStage({ layout, theme }: { layout: ResolvedLayout; theme: "light" | "dark" }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -54,6 +76,7 @@ function App() {
   const [model, setModel] = useState(defaultJacketModel);
   const [renderer, setRenderer] = useState<"dom" | "canvas">("dom");
   const [theme, setTheme] = usePersistedTheme();
+  const [stageColumnRef, stageColumnHeight] = useMeasuredHeight<HTMLDivElement>();
 
   const spec = useMemo(() => buildAdSpec(model), [model]);
 
@@ -83,18 +106,15 @@ function App() {
           Adaptive Layout Engine
         </span>
 
-        <div className="segmented" role="group" aria-label="Renderer">
-          <button type="button" className={renderer === "dom" ? "active" : ""} onClick={() => setRenderer("dom")}>
-            DOM + 3D
-          </button>
-          <button
-            type="button"
-            className={renderer === "canvas" ? "active" : ""}
-            onClick={() => setRenderer("canvas")}
-          >
-            Canvas
-          </button>
-        </div>
+        <Segmented
+          ariaLabel="Renderer"
+          activeKey={renderer}
+          options={[
+            { key: "dom", label: "DOM + 3D" },
+            { key: "canvas", label: "Canvas" },
+          ]}
+          onSelect={(key) => setRenderer(key as "dom" | "canvas")}
+        />
 
         <AnimatedThemeToggler
           className="icon-button"
@@ -106,7 +126,10 @@ function App() {
       </header>
 
       <div className="dashboard">
-        <div className="column">
+        <div
+          className="column column-controls"
+          style={{ "--stage-col-h": stageColumnHeight ? `${stageColumnHeight}px` : undefined } as CSSProperties}
+        >
           <div className="panel glass">
             <SurfacePicker selectedId={surface.id} onSelect={setSurface} />
           </div>
@@ -118,7 +141,7 @@ function App() {
           )}
         </div>
 
-        <div className="column">
+        <div className="column" ref={stageColumnRef}>
           <div className="stage-window glass">
             <div className="titlebar">
               <div className="titlebar-dots" aria-hidden="true">
@@ -149,19 +172,12 @@ function App() {
           </div>
 
           <div className="panel glass">
-            <div className="segmented" role="group" aria-label="Product model">
-              {jacketModels.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={m.id === model.id ? "active" : ""}
-                  aria-pressed={m.id === model.id}
-                  onClick={() => setModel(m)}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              ariaLabel="Product model"
+              activeKey={model.id}
+              options={jacketModels.map((m) => ({ key: m.id, label: m.label }))}
+              onSelect={(key) => setModel(jacketModels.find((m) => m.id === key) ?? model)}
+            />
           </div>
         </div>
       </div>

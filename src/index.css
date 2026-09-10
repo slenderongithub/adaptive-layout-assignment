@@ -25,18 +25,19 @@
        pill  -> every interactive control, no exceptions
        panel -> every content panel
        shell -> the one outer container (stage window) that nests a panel
+     Shell matches panel exactly now — a bigger shell radius read as
+     "softer" next to the panels despite being a larger absolute number,
+     since radius reads relative to box size. One value, no mismatch.
      Nested radii are *derived*, never chosen: R_inner = R_outer - padding. */
   --r-pill: 9999px;
   --r-panel: 24px;
-  --r-shell: 32px;
-  --r-inset: calc(var(--r-panel) - var(--space-4)); /* 24 - 16 =  8 */
-  --r-stage: calc(var(--r-shell) - var(--space-4)); /* 32 - 16 = 16 */
+  --r-shell: var(--r-panel);
+  --r-inset: calc(var(--r-panel) - var(--space-4)); /* 24 - 16 = 8 */
+  --r-stage: calc(var(--r-shell) - var(--space-4)); /* 24 - 16 = 8 */
 
   /* ---- surfaces --------------------------------------------------------- */
   --page-bg: #f3efe8;
-  --scrim-near: rgba(243, 239, 232, 0.52); /* over the shader, page top    */
-  --scrim-far: rgba(243, 239, 232, 0.8); /* over the shader, page edges  */
-  --fill-sunken: rgba(24, 21, 16, 0.05); /* inset tracks, code blocks     */
+  --fill-sunken: rgba(24, 21, 16, 0.05); /* inset tracks                  */
   --fill-raised: rgba(255, 255, 255, 0.45); /* resting list rows             */
   --fill-hover: rgba(255, 255, 255, 0.8);
 
@@ -59,6 +60,14 @@
   --selected-bg: #17140f;
   --selected-ink: #f7f4ee;
 
+  /* ---- code block: fixed, not themed ------------------------------------
+     JSON reads as code, not prose. A translucent glass tint here rode on
+     whatever colour the shader happened to be showing through it, so
+     contrast came and went as the background animated. One dark surface,
+     light text, same in both themes — like every other code block. */
+  --code-bg: #1b1a1f;
+  --code-ink: #e7e4ee;
+
   /* ---- accent ----------------------------------------------------------- */
   --gradient-start: #2b261e;
   --gradient-end: #a3603f;
@@ -78,6 +87,10 @@
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --dur-fast: 0.16s;
   --dur-base: 0.28s;
+  /* a slight overshoot: the segmented pill settles like it has weight,
+     instead of the linear glide a plain ease-out gives it */
+  --ease-liquid: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-liquid: 0.45s;
 
   /* ---- the simulated ad creative -------------------------------------
      Its own palette — separate tokens, its own contrast rules — but it does
@@ -108,8 +121,6 @@
   color-scheme: dark;
 
   --page-bg: #0a0a0a;
-  --scrim-near: rgba(8, 8, 8, 0.42);
-  --scrim-far: rgba(8, 8, 8, 0.84);
   --fill-sunken: rgba(255, 255, 255, 0.05);
   --fill-raised: rgba(255, 255, 255, 0.06);
   --fill-hover: rgba(255, 255, 255, 0.12);
@@ -122,7 +133,7 @@
   --glass-stroke-shade: rgba(67, 67, 67, 0.1);
 
   --ink: #ffffff;
-  --ink-muted: rgba(255, 255, 255, 0.62);
+  --ink-muted: rgba(255, 255, 255, 0.74);
   --ink-faint: rgba(255, 255, 255, 0.4);
 
   --selected-bg: #ffffff;
@@ -249,8 +260,12 @@ textarea {
   padding: var(--space-4);
 }
 
-/* --- segmented control: one component, used for both mode switches ----- */
+/* --- segmented control: one component, used for all three tab/toggle rows -
+   The active pill is `.segmented-indicator`, a single element that slides
+   and resizes under the buttons (see components/Segmented.tsx) rather than
+   each button flashing its own background in and out. */
 .segmented {
+  position: relative;
   display: flex;
   gap: var(--space-1);
   padding: var(--space-1);
@@ -259,7 +274,20 @@ textarea {
   box-shadow: var(--shadow-sunken);
 }
 
+.segmented-indicator {
+  position: absolute;
+  top: var(--space-1);
+  bottom: var(--space-1);
+  left: 0;
+  border-radius: var(--r-pill);
+  background: var(--selected-bg);
+  box-shadow: var(--shadow-raised);
+  transition: transform var(--dur-liquid) var(--ease-liquid), width var(--dur-liquid) var(--ease-liquid);
+}
+
 .segmented button {
+  position: relative;
+  z-index: 1;
   flex: 1;
   display: grid;
   place-items: center;
@@ -274,8 +302,7 @@ textarea {
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
+  transition: color var(--dur-fast) var(--ease);
 }
 
 .segmented button:hover {
@@ -283,9 +310,7 @@ textarea {
 }
 
 .segmented button.active {
-  background: var(--selected-bg);
   color: var(--selected-ink);
-  box-shadow: var(--shadow-raised);
 }
 
 /* --- solid button: the one "go" action ---------------------------------
@@ -351,8 +376,8 @@ textarea {
 
 /* ==========================================================================
    4. BACKGROUND
-   Two layers, not four: the live shader, and one static wash that keeps
-   type legible over it. No drifting gradients, no bezel.
+   Just the live shader. Legibility comes from the .glass panels sitting on
+   top of it, not from a wash over the background itself.
    ========================================================================== */
 
 .backdrop {
@@ -361,13 +386,6 @@ textarea {
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
-}
-
-.backdrop-scrim {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(120% 90% at 50% 0%, var(--scrim-near) 0%, var(--scrim-far) 72%);
-  transition: background var(--dur-base) ease;
 }
 
 /* ==========================================================================
@@ -433,6 +451,16 @@ textarea {
   min-width: 0;
 }
 
+/* Pinned to the stage column's measured height (see App.tsx's
+   useMeasuredHeight) so its bottom edge lands level with it regardless of
+   which surface is picked — a grid/flex stretch alone can't do this, since
+   an auto-sized row grows to fit whichever column's *content* is tallest,
+   which is exactly the case that needs correcting. .debug-panel is the
+   flexible member that actually grows or scrolls to fill the pinned height. */
+.column-controls {
+  height: var(--stage-col-h, auto);
+}
+
 /* ==========================================================================
    6. COMPONENTS
    ========================================================================== */
@@ -447,7 +475,7 @@ textarea {
 .preset-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .preset-list button {
@@ -455,7 +483,7 @@ textarea {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4);
   border: 1px solid var(--hairline);
   border-radius: var(--r-pill);
   background: var(--fill-raised);
@@ -598,6 +626,15 @@ textarea {
 }
 
 /* --- debug panel -------------------------------------------------------- */
+/* Grows to fill the stretched column so its bottom edge always lands level
+   with the stage column, instead of stopping short whenever the trace is
+   shorter than the preview. Scrolls internally if a trace ever runs long. */
+.debug-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .debug-head {
   display: flex;
   align-items: center;
@@ -636,20 +673,20 @@ textarea {
 .debug-body ol {
   margin: 0;
   padding-left: var(--space-6);
-  font: 12px/1.6 ui-monospace, monospace;
+  font: 13px/1.6 ui-monospace, monospace;
   color: var(--ink-muted);
 }
 
-/* Capped so the control column finishes level with the stage column instead of
-   dangling a few hundred pixels below it. The dump scrolls inside the well. */
+/* Own hard cap regardless of the column-height match above, so a pathological
+   dump scrolls inside the well instead of pushing the panel taller. */
 .debug-body pre {
   margin: 0;
   padding: var(--space-4);
-  border: 1px solid var(--hairline);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--r-inset);
-  background: var(--fill-sunken);
-  color: var(--ink-muted);
-  font: 12px/1.6 ui-monospace, monospace;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font: 13px/1.6 ui-monospace, monospace;
   max-height: 176px;
   overflow: auto;
 }
@@ -673,6 +710,12 @@ textarea {
 
   .dashboard {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Columns stack instead of sitting side by side, so there's no shared
+     bottom edge to line up — let the controls column size to its content. */
+  .column-controls {
+    height: auto;
   }
 
   .stage-body {

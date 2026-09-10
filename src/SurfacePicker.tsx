@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { RippleButton } from "./components/ui/ripple-button";
+import { Segmented } from "./components/Segmented";
 import { defineSurfaceProfile, presetSurfaces, type SurfaceProfile } from "./surfaces";
 import type { Validated } from "./spec";
 
@@ -36,14 +37,15 @@ export function SurfacePicker({
 
   return (
     <div className="surface-picker">
-      <div className="segmented" role="group" aria-label="Surface source">
-        <button type="button" className={tab === "presets" ? "active" : ""} onClick={() => setTab("presets")}>
-          Presets
-        </button>
-        <button type="button" className={tab === "custom" ? "active" : ""} onClick={() => setTab("custom")}>
-          Custom
-        </button>
-      </div>
+      <Segmented
+        ariaLabel="Surface source"
+        activeKey={tab}
+        options={[
+          { key: "presets", label: "Presets" },
+          { key: "custom", label: "Custom" },
+        ]}
+        onSelect={(key) => setTab(key as "presets" | "custom")}
+      />
 
       {tab === "presets" ? (
         <div className="preset-list">

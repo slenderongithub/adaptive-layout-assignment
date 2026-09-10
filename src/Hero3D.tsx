@@ -108,9 +108,14 @@ export function Hero3D({ modelUrl }: { modelUrl: string }) {
       gl={{ alpha: true, antialias: true, preserveDrawingBuffer: true }}
       style={{ width: "100%", height: "100%" }}
     >
-      <ambientLight intensity={0.9} />
-      <directionalLight position={[3, 5, 2]} intensity={1.8} />
-      <directionalLight position={[-3, -2, -4]} intensity={0.6} />
+      {/* Lower ambient + a hotter key gives the fabric actual shadow contrast
+          instead of the flat, everything-lit-equally look a high ambient
+          produces. The rim light is what separates the garment's silhouette
+          from the backdrop in both light and dark themes. */}
+      <ambientLight intensity={0.55} />
+      <directionalLight position={[3, 5, 2]} intensity={2.6} />
+      <directionalLight position={[-3, -2, -4]} intensity={0.9} />
+      <directionalLight position={[0, 2, -6]} intensity={1.3} />
       <Suspense fallback={null}>
         <FittedModel url={modelUrl} />
         <SnapshotBridge url={modelUrl} />
