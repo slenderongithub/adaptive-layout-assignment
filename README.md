@@ -5,7 +5,7 @@ ad spec resolves into visibly different absolute-pixel layouts for phone
 portrait, phone landscape, broadcast lower-third, square kiosk, compact
 widget, and custom surfaces pasted at runtime.
 
-Time spent: ~18 hours over 4 days.
+Time spent: ~10 hours over 3 days.
 
 ## Setup
 
