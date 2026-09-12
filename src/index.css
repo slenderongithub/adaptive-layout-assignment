@@ -36,52 +36,52 @@
   --r-stage: calc(var(--r-shell) - var(--space-4)); /* 24 - 16 = 8 */
 
   /* ---- surfaces --------------------------------------------------------- */
-  --page-bg: #f3efe8;
-  --fill-sunken: rgba(24, 21, 16, 0.05); /* inset tracks                  */
-  --fill-raised: rgba(255, 255, 255, 0.45); /* resting list rows             */
-  --fill-hover: rgba(255, 255, 255, 0.8);
+  --page-bg: #f4f7ff;
+  --fill-sunken: rgba(25, 35, 63, 0.08); /* inset tracks                  */
+  --fill-raised: rgba(255, 255, 255, 0.72); /* resting list rows             */
+  --fill-hover: rgba(255, 255, 255, 0.94);
 
   /* ---- hairlines -------------------------------------------------------- */
-  --hairline: rgba(24, 21, 16, 0.1);
-  --hairline-strong: rgba(24, 21, 16, 0.2);
+  --hairline: rgba(43, 58, 101, 0.14);
+  --hairline-strong: rgba(43, 58, 101, 0.26);
 
   /* ---- glass ------------------------------------------------------------ */
-  --glass-fill: rgba(255, 255, 255, 0.5);
-  --glass-stroke-lit: rgba(255, 255, 255, 0.95); /* edge facing the light  */
-  --glass-stroke-shade: rgba(24, 21, 16, 0.06); /* edge facing away       */
+  --glass-fill: rgba(255, 255, 255, 0.68);
+  --glass-stroke-lit: rgba(255, 255, 255, 0.98); /* edge facing the light  */
+  --glass-stroke-shade: rgba(43, 58, 101, 0.18); /* edge facing away       */
   --glass-blur: 24px;
 
   /* ---- ink -------------------------------------------------------------- */
-  --ink: #17140f;
-  --ink-muted: rgba(23, 20, 15, 0.62);
-  --ink-faint: rgba(23, 20, 15, 0.42);
+  --ink: #151b2f;
+  --ink-muted: #58647e;
+  --ink-faint: #7b87a0;
 
   /* ---- selection: one inversion pair, flips with the theme -------------- */
-  --selected-bg: #17140f;
-  --selected-ink: #f7f4ee;
+  --selected-bg: #1f2a56;
+  --selected-ink: #f8faff;
 
   /* ---- code block: fixed, not themed ------------------------------------
      JSON reads as code, not prose. A translucent glass tint here rode on
      whatever colour the shader happened to be showing through it, so
      contrast came and went as the background animated. One dark surface,
      light text, same in both themes — like every other code block. */
-  --code-bg: #1b1a1f;
-  --code-ink: #e7e4ee;
+  --code-bg: #12192c;
+  --code-ink: #e7edff;
 
   /* ---- accent ----------------------------------------------------------- */
-  --gradient-start: #2b261e;
-  --gradient-end: #a3603f;
-  --accent: #a3603f;
-  --danger: #c72d6c;
+  --gradient-start: #354a9b;
+  --gradient-end: #a56ee8;
+  --accent: #5b54dc;
+  --danger: #c52d61;
 
   /* ---- elevation --------------------------------------------------------
      One light source for the whole app: directly overhead. Every shadow
      casts straight down (+y), every lit edge is the top edge, every inset
      highlight sits at the top. Nothing rakes sideways. */
-  --shadow-raised: 0 1px 2px rgba(24, 21, 16, 0.06), 0 2px 6px rgba(24, 21, 16, 0.05);
-  --shadow-panel: 0 2px 8px rgba(24, 21, 16, 0.05), 0 16px 40px rgba(24, 21, 16, 0.09);
-  --shadow-stage: 0 4px 12px rgba(24, 21, 16, 0.1), 0 24px 64px rgba(24, 21, 16, 0.18);
-  --shadow-sunken: inset 0 1px 2px rgba(24, 21, 16, 0.06);
+  --shadow-raised: 0 1px 2px rgba(20, 29, 57, 0.08), 0 5px 14px rgba(31, 47, 89, 0.10);
+  --shadow-panel: 0 3px 10px rgba(20, 29, 57, 0.10), 0 20px 48px rgba(48, 64, 113, 0.16);
+  --shadow-stage: 0 6px 18px rgba(20, 29, 57, 0.14), 0 30px 76px rgba(48, 64, 113, 0.22);
+  --shadow-sunken: inset 0 1px 2px rgba(20, 29, 57, 0.08);
 
   /* ---- motion ----------------------------------------------------------- */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
@@ -120,33 +120,33 @@
 :root.dark {
   color-scheme: dark;
 
-  --page-bg: #0a0a0a;
-  --fill-sunken: rgba(255, 255, 255, 0.05);
-  --fill-raised: rgba(255, 255, 255, 0.06);
-  --fill-hover: rgba(255, 255, 255, 0.12);
+  --page-bg: #090d1b;
+  --fill-sunken: rgba(0, 0, 0, 0.28);
+  --fill-raised: rgba(28, 39, 71, 0.66);
+  --fill-hover: rgba(49, 65, 111, 0.78);
 
-  --hairline: rgba(255, 255, 255, 0.1);
-  --hairline-strong: rgba(255, 255, 255, 0.24);
+  --hairline: rgba(210, 221, 255, 0.16);
+  --hairline-strong: rgba(210, 221, 255, 0.30);
 
-  --glass-fill: rgba(10, 10, 10, 0.44);
-  --glass-stroke-lit: rgba(255, 255, 255, 0.3);
-  --glass-stroke-shade: rgba(67, 67, 67, 0.1);
+  --glass-fill: rgba(22, 30, 56, 0.76);
+  --glass-stroke-lit: rgba(210, 221, 255, 0.24);
+  --glass-stroke-shade: rgba(0, 0, 0, 0.48);
 
   --ink: #ffffff;
-  --ink-muted: rgba(255, 255, 255, 0.74);
-  --ink-faint: rgba(255, 255, 255, 0.4);
+  --ink-muted: #bac4df;
+  --ink-faint: #8996b8;
 
-  --selected-bg: #ffffff;
-  --selected-ink: #0a0a0a;
+  --selected-bg: #f1f4ff;
+  --selected-ink: #141a30;
 
-  --gradient-start: #fdfbf5;
-  --gradient-end: #dcb7ad;
-  --accent: #dcb7ad;
-  --danger: #e6528a;
+  --gradient-start: #7687ff;
+  --gradient-end: #cf7cff;
+  --accent: #9b8cff;
+  --danger: #ff6f9d;
 
-  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.24);
-  --shadow-panel: 0 2px 8px rgba(0, 0, 0, 0.24), 0 16px 40px rgba(0, 0, 0, 0.36);
-  --shadow-stage: 0 4px 12px rgba(0, 0, 0, 0.36), 0 24px 64px rgba(0, 0, 0, 0.48);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.34), 0 5px 16px rgba(0, 0, 0, 0.34);
+  --shadow-panel: 0 4px 14px rgba(0, 0, 0, 0.35), 0 22px 54px rgba(0, 0, 0, 0.48);
+  --shadow-stage: 0 8px 22px rgba(0, 0, 0, 0.45), 0 34px 84px rgba(0, 0, 0, 0.58);
   --shadow-sunken: inset 0 1px 2px rgba(0, 0, 0, 0.35);
 
   --ad-bg-1: #1c1c1c;
