@@ -118,7 +118,7 @@ function App() {
 
         <AnimatedThemeToggler
           className="icon-button"
-          variant="diamond"
+          variant="circle"
           duration={1100}
           theme={theme}
           onThemeChange={setTheme}
