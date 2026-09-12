@@ -399,6 +399,103 @@ describe("micro template", () => {
   });
 });
 
+describe("submission contract edges", () => {
+  it("honours minTextSize for broadcast CTA label text", () => {
+    const layout = resolve(jacketAdSpec, surfaceById("broadcastLowerThird"));
+    const cta = layout.elements.find((e) => e.role === "cta")!;
+    expect(cta.fontSize).toBeGreaterThanOrEqual(32);
+  });
+
+  it("accounts for every spec element as either placed or dropped", () => {
+    for (const surface of presetSurfaces) {
+      const layout = resolve(jacketAdSpec, surface);
+      const accounted = new Set([...layout.elements.map((e) => e.id), ...layout.droppedElementIds]);
+      expect(accounted.size).toBe(jacketAdSpec.elements.length);
+      for (const el of jacketAdSpec.elements) expect(accounted.has(el.id)).toBe(true);
+    }
+  });
+
+  it("rejects duplicate semantic roles instead of silently losing one later", () => {
+    expect(() =>
+      defineAdSpec({
+        id: "duplicate-role",
+        elements: [
+          { id: "h", type: "text", role: "headline", priority: 1, content: "Hi" },
+          { id: "cta", type: "button", role: "cta", priority: 1, label: "Buy" },
+          { id: "hero-a", type: "image", role: "hero-image", priority: 2, src: "a", aspectRatio: 1 },
+          { id: "hero-b", type: "image", role: "hero-image", priority: 3, src: "b", aspectRatio: 1 },
+        ],
+      }),
+    ).toThrow(/duplicate element role "hero-image"/);
+  });
+
+  it("rejects malformed custom-surface JSON values with clear validation errors", () => {
+    expect(() =>
+      defineSurfaceProfile({
+        id: "bad-width",
+        width: Number.POSITIVE_INFINITY,
+        height: 100,
+        safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+        touchOnly: false,
+      }),
+    ).toThrow(/width must be a finite number/);
+
+    expect(() =>
+      defineSurfaceProfile({
+        id: "bad-safe-area",
+        width: 100,
+        height: 100,
+        safeArea: null,
+        touchOnly: false,
+      } as never),
+    ).toThrow(/safeArea must be an object/);
+  });
+
+  it("falls back to stack when split would make the undroppable headline impossible", () => {
+    const spec = defineAdSpec({
+      id: "side-by-side-headline-fallback",
+      elements: [
+        { id: "hero", type: "image", role: "hero-image", priority: 3, canDrop: true, src: "hero", aspectRatio: 1 },
+        {
+          id: "headline",
+          type: "text",
+          role: "headline",
+          priority: 1,
+          canDrop: false,
+          content: "UnbreakableLayout",
+        },
+        { id: "cta", type: "button", role: "cta", priority: 1, canDrop: false, label: "Buy Now" },
+      ],
+    });
+    const surface = defineSurfaceProfile({
+      id: "narrow-split-copy",
+      width: 300,
+      height: 240,
+      safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+      touchOnly: true,
+      minTapTarget: 44,
+      minTextSize: 22,
+    });
+
+    const layout = resolve(spec, surface);
+    expect(layout.template).toBe("stack");
+    expect(checkInvariants(layout, surface, spec)).toEqual([]);
+    expect(layout.droppedElementIds).not.toContain("headline");
+    expect(layout.droppedElementIds).not.toContain("cta");
+  });
+
+  it("rejects a banner whose CTA floor is taller than the safe-area height", () => {
+    const surface = defineSurfaceProfile({
+      id: "short-wide-banner",
+      width: 520,
+      height: 64,
+      safeArea: { top: 11, right: 7, bottom: 22, left: 16 },
+      touchOnly: false,
+    });
+    expect(() => resolve(jacketAdSpec, surface)).toThrow(/cannot fit|undroppable elements/);
+  });
+});
+
 it("throws a documented pathological error when undroppable elements cannot fit", () => {
   const tiny = defineSurfaceProfile({
     id: "tiny",

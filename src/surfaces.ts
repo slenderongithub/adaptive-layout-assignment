@@ -15,32 +15,80 @@ type NonTouchSurface = { touchOnly?: false; minTapTarget?: number };
 // `{ touchOnly: true }` without `minTapTarget` fails to compile.
 export type SurfaceProfile = SurfaceBase & (TouchSurface | NonTouchSurface);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function invalidSurfaceMessage(surface: unknown, errors: string[]): Error {
+  const id = isRecord(surface) && typeof surface.id === "string" && surface.id.trim() ? surface.id : "<unknown>";
+  return new Error(`Invalid SurfaceProfile "${id}":\n  - ${errors.join("\n  - ")}`);
+}
+
 export function defineSurfaceProfile(s: SurfaceProfile): Validated<SurfaceProfile> {
   const errors: string[] = [];
 
-  if (!(s.width > 0)) errors.push(`width must be > 0, got ${s.width}`);
-  if (!(s.height > 0)) errors.push(`height must be > 0, got ${s.height}`);
+  if (!isRecord(s)) {
+    throw invalidSurfaceMessage(s, ["surface must be an object"]);
+  }
+
+  if (typeof s.id !== "string" || s.id.trim().length === 0) {
+    errors.push("id must be a non-empty string");
+  }
+
+  if (!isFiniteNumber(s.width) || !(s.width > 0)) errors.push(`width must be a finite number > 0, got ${s.width}`);
+  if (!isFiniteNumber(s.height) || !(s.height > 0)) errors.push(`height must be a finite number > 0, got ${s.height}`);
+
+  if (!isRecord(s.safeArea)) {
+    throw invalidSurfaceMessage(s, [...errors, "safeArea must be an object with top/right/bottom/left numbers"]);
+  }
 
   const { top, right, bottom, left } = s.safeArea;
-  if (top < 0 || right < 0 || bottom < 0 || left < 0) {
-    errors.push("safeArea insets must be >= 0");
+  for (const [key, value] of Object.entries({ top, right, bottom, left })) {
+    if (!isFiniteNumber(value)) errors.push(`safeArea.${key} must be a finite number, got ${value}`);
   }
-  if (top + bottom >= s.height) {
-    errors.push(`safeArea top+bottom (${top + bottom}) leaves no vertical space in height ${s.height}`);
+
+  const hasFiniteSize = isFiniteNumber(s.width) && isFiniteNumber(s.height);
+  const hasFiniteInsets = [top, right, bottom, left].every(isFiniteNumber);
+  if (hasFiniteInsets) {
+    if (top < 0 || right < 0 || bottom < 0 || left < 0) {
+      errors.push("safeArea insets must be >= 0");
+    }
+    if (hasFiniteSize && top + bottom >= s.height) {
+      errors.push(`safeArea top+bottom (${top + bottom}) leaves no vertical space in height ${s.height}`);
+    }
+    if (hasFiniteSize && left + right >= s.width) {
+      errors.push(`safeArea left+right (${left + right}) leaves no horizontal space in width ${s.width}`);
+    }
   }
-  if (left + right >= s.width) {
-    errors.push(`safeArea left+right (${left + right}) leaves no horizontal space in width ${s.width}`);
+
+  if (s.minTextSize !== undefined && (!isFiniteNumber(s.minTextSize) || s.minTextSize <= 0)) {
+    errors.push(`minTextSize must be a finite number > 0 when provided, got ${s.minTextSize}`);
+  }
+
+  if (s.viewingDistance !== undefined && s.viewingDistance !== "near" && s.viewingDistance !== "far") {
+    errors.push(`viewingDistance must be "near" or "far" when provided, got ${s.viewingDistance}`);
+  }
+
+  if (s.touchOnly !== undefined && typeof s.touchOnly !== "boolean") {
+    errors.push(`touchOnly must be a boolean when provided, got ${s.touchOnly}`);
   }
 
   if (s.touchOnly && !(s.minTapTarget > 0)) {
-    errors.push(`touchOnly surface must have minTapTarget > 0, got ${s.minTapTarget}`);
+    errors.push(`touchOnly surface must have minTapTarget as a finite number > 0, got ${s.minTapTarget}`);
+  }
+  if (s.minTapTarget !== undefined && (!isFiniteNumber(s.minTapTarget) || s.minTapTarget <= 0)) {
+    errors.push(`minTapTarget must be a finite number > 0 when provided, got ${s.minTapTarget}`);
   }
 
   if (errors.length > 0) {
-    throw new Error(`Invalid SurfaceProfile "${s.id}":\n  - ${errors.join("\n  - ")}`);
+    throw invalidSurfaceMessage(s, errors);
   }
 
-  return s as Validated<SurfaceProfile>;
+  return s as unknown as Validated<SurfaceProfile>;
 }
 
 export const mobilePortrait: Validated<SurfaceProfile> = defineSurfaceProfile({

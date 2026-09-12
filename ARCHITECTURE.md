@@ -1,163 +1,208 @@
 # Architecture
 
-`src/resolver.ts`, `spec.ts`, `surfaces.ts`, `types.ts`, and `invariants.ts`
-import nothing from React or the DOM. They sit in `src/` alongside the React
-files only because the assessment's required submission structure
-(`src/spec.ts, surfaces.ts, resolver.ts, render-dom.tsx, App.tsx`) is flat —
-not because the core and the UI are entangled. `render-dom.tsx` and
-`render-canvas.ts` are the only two files that know a browser exists, and
-they're interchangeable consumers of the same `ResolvedLayout` type (see the
-DOM/Canvas toggle in the demo app).
+The project is intentionally split into four layers:
 
-## Data flow
+```text
+spec + surface definitions
+  -> validation
+  -> resolver
+  -> resolved layout
+  -> renderer
+```
+
+The core engine files (`src/spec.ts`, `src/surfaces.ts`, `src/resolver.ts`,
+`src/types.ts`, and `src/invariants.ts`) do not import React, DOM, Canvas, or
+CSS. `src/render-dom.tsx` and `src/render-canvas.ts` are consumers of the same
+`ResolvedLayout` contract.
+
+## Data Flow
 
 ```mermaid
 flowchart LR
-    A["AdSpec (raw)"] -->|defineAdSpec| B["Validated&lt;AdSpec&gt;"]
-    C["SurfaceProfile (raw)"] -->|defineSurfaceProfile| D["Validated&lt;SurfaceProfile&gt;"]
+    A["Raw AdSpec"] -->|defineAdSpec| B["Validated<AdSpec>"]
+    C["Raw SurfaceProfile"] -->|defineSurfaceProfile| D["Validated<SurfaceProfile>"]
     B --> E["resolve(spec, surface)"]
     D --> E
     E --> F["ResolvedLayout"]
-    F --> G["render-dom.tsx"]
-    F --> H["render-canvas.ts"]
+    F --> G["DOM renderer"]
+    F --> H["Canvas renderer"]
 ```
 
-`resolve()`'s signature — `(Validated<AdSpec>, Validated<SurfaceProfile>) =>
-ResolvedLayout` — only accepts branded inputs, so a spec or surface that
-skipped its validator can't be passed in. That's enforced at compile time,
-not by a runtime guard at the top of `resolve()`.
+`resolve()` accepts only `Validated<AdSpec>` and
+`Validated<SurfaceProfile>`. The brand type forces callers to pass through the
+validators before layout resolution.
 
-## The algorithm
+## Input Model
 
-Named constants live at the top of `resolver.ts` as the single source of
-truth (`GAP`, `CTA_MIN_WIDTH`, `HERO_MAX_FRACTION_ROW`,
-`AXIS_ROW_THRESHOLD`, `FONT_SIZE_BY_ROLE`, etc.) — point at these directly
-when asked "why did X end up that size."
+The ad spec defines semantic intent once:
 
-**Phase A — Setup.** `contentBox` = surface bounds minus `safeArea`. All
-downstream math works only inside this rectangle.
-`aspect = contentBox.width / contentBox.height`, and:
+- `headline` - primary text
+- `price` - commercial text
+- `secondary` - supporting text
+- `hero-image` - main product visual
+- `cta` - action button
+- `branding` - brand mark
 
-```
-axisMode = aspect >= 1.35 ? "row" : aspect <= 0.75 ? "column" : "grid2col"
-```
+The resolver assumes one slot per role. `defineAdSpec()` enforces that
+assumption by rejecting duplicate roles, duplicate IDs, empty content, invalid
+role/type pairings, non-positive priorities, bad image aspect ratios, and
+malformed optional flags.
 
-This one comparison is the entire surface-specific decision in the whole
-algorithm. Everything downstream reads only `axisMode` and the numeric
-`contentBox` — never `surface.id`. That's the concrete, demonstrable proof
-for "same code path, not hardcoded per surface": grep `resolver.ts` for
-`surface.id` and the only hits are in the final output object.
+Surface profiles provide real constraints, not just size:
 
-**Phase B — Natural size per element**, computed from role + `axisMode`:
-hero images fill the leading axis and are capped on the other one, letting
-`fitAspectInBox` do the aspect-preserving fit (never distorted — this is
-also why hero's placed rect always uses its own computed width *and*
-height, not the region's full box, in every axis mode). Text height is
-`fontSize × 1.3`; `fontSize` is `max(role default × viewingDistance scale,
-surface.minTextSize, element.minFontSize)`. Buttons are
-`max(CTA_MIN_WIDTH, minTapTarget)` × `max(CTA_DEFAULT_HEIGHT,
-minTapTarget)`. Branding gets a small fixed-fraction corner box.
+- `safeArea` defines the content rectangle
+- `minTextSize` sets a hard type floor for text and CTA labels
+- `touchOnly` plus `minTapTarget` sets button hit-target floors
+- `viewingDistance: "far"` increases the type scale for broadcast-style use
 
-**Phase C — Region assignment + packing.** Branding is excluded from the
-main flow entirely and placed afterward at whichever of the 4 corners
-(bottom-right → top-right → bottom-left → top-left) doesn't overlap
-anything and stays inside `contentBox` — a real geometric search, not a
-fixed reservation. Everything else is assigned to region(s) generated
-mechanically from `axisMode`: one full-box stack for `column`; a hero-led
-leading region plus a stacked remainder for `row`; a fixed 55/45 two-column
-split for `grid2col`. Within a stack region, elements are placed
-top-to-bottom in priority order — one forward cursor pass, no wrapping, no
-cross-axis packing (deliberately, per the FAQ's steer away from a general
-solver). A region "overflows" if the stack's used height exceeds its
-budget, *or* if any element's natural width exceeds the region's width —
-both feed the same overflow signal that drives Phase D.
+`defineSurfaceProfile()` rejects malformed custom JSON, non-finite dimensions,
+invalid safe areas, missing tap targets on touch surfaces, and invalid enum
+values.
 
-**Phase D — Global priority-ordered degradation loop**, the actual proof of
-"genuine adaptation, not scaling":
+## Resolver Phases
 
-```
-loop:
-  recompute regions + branding placement from current element state
-  if nothing overflows → done
-  candidates = elements with a remaining degradation stage,
-               sorted by priority DESC (least important first)
-  if candidates empty → throw (surface too small for the undroppable set)
-  degrade candidates[0] by one stage; repeat
+### 1. Content Box
+
+The surface bounds are reduced by `safeArea`. All placement happens inside
+that content box. The invariant checker rejects anything outside it.
+
+### 2. Continuous Sizing
+
+The resolver computes one base type size from content-box area and height:
+
+```text
+base = f(sqrt(width * height), height, viewingDistance)
 ```
 
-Degradation is **monotonic** — see the Limitations section in the README
-for why. Stages: text shrinks in 2px steps to its floor, then truncates
-(once), then drops (if `canDrop`); images (including branding) shrink
-proportionally to a 20px floor, then drop; buttons only drop. Every stage
-application appends a plain-English `warnings[]` line — that's what the
-debug panel renders and what gets pointed at when narrating "why is X
-here."
+Role multipliers derive headline, price, and secondary text from that base.
+Hard floors then apply:
 
-**Phase E/F — Hard-constraint + overlap check.** Rather than duplicating
-these checks inline, `resolve()` builds the full `ResolvedLayout` and then
-calls `checkInvariants(layout, surface, spec)` from `invariants.ts` — the
-same function the test suite calls directly against all 5 presets plus 2
-synthetic edge surfaces. Any violation throws. This means the "safety net"
-and "test assertions" are the same code, not two implementations that could
-drift apart.
+- text uses `max(surface.minTextSize, TYPE_MIN, element.minFontSize)`
+- CTA labels use `max(surface.minTextSize, CTA_FONT_MIN)`
+- touch CTAs use `minTapTarget` for both width and height floors
 
-**Phase G — Output.** `ResolvedLayout` — visible elements only (rounded to
-2 decimal places for a clean debug JSON), `droppedElementIds`, and the
-`warnings[]` trace.
+This lets a kiosk get larger type than a small widget without maintaining a
+surface-name lookup table.
 
-## Why an unseen 5th surface "just works"
+### 3. Template Selection
 
-`resolve()` never branches on `surface.id` or any string identity — the
-only surface-derived decision points are Phase A's arithmetic, computed
-purely from numeric fields every `SurfaceProfile` has. A brand-new profile
-(say, an 800×1200 tall panel with `minTextSize: 14`) flows through:
-`contentBox` → `aspect 0.67` → `axisMode = "column"` → identical
-stacking/degradation code to mobile portrait, just different absolute
-numbers. Missing optional fields (`touchOnly`, `viewingDistance`) degrade
-gracefully via `??` defaults, never crash.
+The resolver chooses one of four templates from numeric constraints:
 
-The demo's **Custom Surface** tab wires a JSON textarea to the exact same
-`defineSurfaceProfile()` → `resolve()` call the 5 presets use — paste an
-unseen surface, hit Resolve, zero code change. Verified live: a
-200×900 tall-narrow surface and a 2400×150 ultra-wide surface both resolve
-cleanly with zero warnings (see `tests/resolver.test.ts`, "unseen surfaces
-(fuzzing the axis thresholds)").
+- `stack` - hero above copy; used for portrait or narrow content boxes
+- `split` - hero column plus copy/CTA column; used for square and landscape
+  boxes with enough absolute width
+- `banner` - hero, copy, and CTA in separate horizontal zones; used for very
+  wide strips
+- `micro` - hero-dominant top region plus a compact bottom bar; used when both
+  dimensions are too small for ordinary stack behavior
 
-## Type design highlights
+The decision is based on content-box aspect ratio and capacity gates. The code
+does not branch on `surface.id` for placement.
 
-- `ElementSpec` is a discriminated union on `type` (`text | image |
-  button`). `resolver.ts`'s `hasMoreStages` and `degradeOneStep` both
-  `switch` on `spec.type` with a `default: assertNever(spec)` — adding a
-  4th element type without handling it in both switches is a compile
-  error, not a silent runtime gap.
-- `SurfaceProfile`'s touch/non-touch split is a union:
-  `{ touchOnly: true; minTapTarget: number } | { touchOnly?: false;
-  minTapTarget?: number }`. Writing `{ touchOnly: true }` without
-  `minTapTarget` fails to compile — the "invalid constraint combination"
-  requirement enforced structurally, not with a runtime check.
-- `Validated<T>` is a branded type (`T & { readonly [validated]: true }`)
-  with the brand symbol never exported — the only way to produce one is
-  through `defineAdSpec` / `defineSurfaceProfile`, so `resolve()`'s
-  signature statically forces validation-before-use.
-- Runtime validators still exist alongside the compile-time guarantees,
-  because specs built from untyped JSON (like the Custom Surface textarea)
-  bypass the type system entirely — `defineAdSpec` / `defineSurfaceProfile`
-  throw an `Error` listing every violation found, not just the first.
+Before a side-by-side template is committed, the resolver checks whether the
+undroppable headline can fit the actual copy column at its required floor. If
+the column would force an unbreakable or over-line headline, the template falls
+back to `stack` so the copy can use the full width before the resolver gives up.
 
-## Pitfalls this design avoids
+### 4. Composition
 
-- **Hardcoded branches disguised as a resolver** — `surface.id` never
-  appears in placement logic.
-- **CSS media queries deciding placement** — `render-dom.tsx` has zero
-  `@media` rules; every geometry value comes from the resolver's output.
-  The demo's `transform: scale()` preview wrapper is cosmetic fit only —
-  the resolver always computes true, unscaled pixels.
-- **Uniform scaling passed off as adaptation** — `axisMode` changes
-  *composition* (row/column/grid2col), not a scale factor. Compare mobile
-  portrait (hero stacked with text) against broadcast lower-third (hero as
-  a leading band beside the text) in the demo — same spec, same resolver,
-  structurally different output.
-- **Silent overlap/clipping** — `checkInvariants` runs both inside
-  `resolve()` and across every preset + edge case in the test suite.
-- **Over-engineering the solver** — one forward sizing pass + one backward
-  degradation loop. No iterative relaxation, no backtracking, no simplex.
+Composition is a pure pass over the current element states. It returns:
+
+- a rectangle for each placed element
+- resolver-chosen text lines
+- effective font sizes
+- an overflow flag
+
+The hero image is elastic. In `stack`, it takes the vertical space left by the
+copy. In `split` and `banner`, it takes a side column only after the text
+column keeps its minimum readable width. In `micro`, the hero gets a dominant
+top share first, because tiny square surfaces otherwise starve the image.
+
+Text wrapping is computed by the resolver with a deterministic glyph-width
+estimate. Renderers draw the lines they are handed; they do not decide wrapping
+or placement.
+
+### 5. Priority Degradation
+
+If composition overflows, the resolver degrades exactly one element and
+recomposes from scratch.
+
+```text
+while composition overflows:
+  candidates = visible elements with remaining degradation stages
+  sort candidates by priority descending
+  degrade the first candidate
+  recompose
+```
+
+Higher numeric priority means less important, so priority `5` degrades before
+priority `1`. Degradation is monotonic and deterministic.
+
+Stages by type:
+
+- text: shrink to its floor, then truncate if allowed, then drop if allowed
+- branding/non-hero image: shrink proportionally, then drop
+- hero image: use elastic sizing first, then drop only if allowed
+- button: preserve tap/text floors; drop only if allowed
+
+Each step adds a human-readable `warnings[]` entry. The demo debug panel shows
+the exact trace used to produce the final layout.
+
+### 6. Output And Invariants
+
+The output is a `ResolvedLayout`:
+
+- surface and spec IDs
+- surface dimensions
+- selected template
+- visible `ResolvedElement[]`
+- `droppedElementIds`
+- degradation warnings
+
+Before returning, `resolve()` runs `checkInvariants()`:
+
+- no overlaps
+- no visible element outside the safe content box
+- touch buttons satisfy `minTapTarget`
+- text and CTA labels satisfy `minTextSize`
+- every input element is either visible or reported dropped
+- no unknown or duplicated output IDs
+- a higher-priority element is not dropped while a lower-priority element
+  survives
+
+If an element is still visible but receives no rectangle, the resolver throws
+immediately. That keeps composition bugs from becoming invisible output gaps.
+
+## Why Unknown Surfaces Work
+
+A new surface needs no resolver code change because the resolver reads only
+the profile's numeric constraints and enum fields:
+
+```text
+width, height, safeArea, minTextSize, minTapTarget, viewingDistance
+```
+
+The Custom Surface tab parses JSON, validates it with `defineSurfaceProfile()`,
+and passes it into the same `resolve()` call as the presets. The test suite also
+sweeps many synthetic width/height combinations to catch threshold failures.
+
+## Renderer Boundary
+
+Renderers receive already-resolved absolute geometry. CSS is allowed to draw
+the final boxes, transitions, typography, and preview scaling, but CSS does not
+choose which composition is used.
+
+This keeps the architecture open to new renderers: Canvas already consumes the
+same `ResolvedElement[]`, and a print or server-side renderer would follow the
+same boundary.
+
+## Known Limits
+
+- The text measurement model is deterministic but approximate. A production
+  engine would inject real font measurement.
+- Degradation does not backtrack or grow elements after later drops free space.
+- The priority ladder is global rather than tied to the overflowing region.
+- The supported element types are deliberately narrow: text, image, and
+  button.
+- Surfaces smaller than the undroppable headline plus CTA can still fail, but
+  they fail explicitly instead of clipping.

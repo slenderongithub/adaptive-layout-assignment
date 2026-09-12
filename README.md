@@ -1,121 +1,142 @@
 # Adaptive Layout Engine
 
-A single, framework-agnostic layout resolver that takes one abstract ad spec
-and one surface profile and produces an absolute-pixel layout — adapting
-composition (not just scaling) across a phone portrait screen, a phone
-landscape screen, a broadcast lower-third, a retail kiosk, and a compact
-widget, plus any unseen surface pasted in at runtime.
+A framework-agnostic TypeScript layout resolver for multi-surface ads. One
+ad spec resolves into visibly different absolute-pixel layouts for phone
+portrait, phone landscape, broadcast lower-third, square kiosk, compact
+widget, and custom surfaces pasted at runtime.
 
-## Run it
+Time spent: ~18 hours over 4 days.
 
-```
+## Setup
+
+```sh
 npm install
-npm run dev      # demo app at http://localhost:5173
-npm run test     # vitest — invariant checks across presets + edge surfaces
-npm run build    # production build
-npx tsc --noEmit # strict type-check
+npm run dev
 ```
 
-## What to look at first
+The demo runs at `http://localhost:5173`.
 
-- `src/resolver.ts` — the algorithm. `resolve(spec, surface)`, ~400 lines,
-  zero React/DOM imports.
-- `src/spec.ts` / `src/surfaces.ts` — the input types and their runtime
-  validators (`defineAdSpec`, `defineSurfaceProfile`).
-- `src/invariants.ts` — the self-check (`checkInvariants`), called both
-  inside `resolve()` and from the test suite.
-- `ARCHITECTURE.md` — the algorithm walked through phase by phase, the type
-  design, and why an unseen surface needs no code change.
+Useful checks:
 
-## Demo app
+```sh
+npm test
+npm run build
+npx tsc --noEmit
+```
 
-Pick one of the 5 preset surfaces, or open **Custom Surface** and paste an
-arbitrary `SurfaceProfile` as JSON — it runs through the exact same
-`defineSurfaceProfile()` → `resolve()` call the presets use. The debug panel
-below the preview shows the plain-English degradation trace (`warnings[]`)
-and the raw `ResolvedLayout` JSON. A DOM / Canvas toggle swaps the renderer
-without touching the resolver, to make the point that the two are decoupled.
+## Demo
 
-## Bonuses implemented
+Use the surface picker to switch between the preset surfaces:
 
-- Custom-surface JSON input (see above)
-- Warnings/decision-trace debug panel
-- Animated transitions between surfaces (CSS transitions on the resolved
-  geometry — the resolver still only ever emits absolute px, the animation
-  is a pure rendering-layer add-on)
-- Accessibility basics: real `<button>` elements for CTAs (enforcing
-  `minTapTarget` gives them a real hit target too), `role="img"` +
-  `aria-label` on image placeholders
-- Canvas renderer (`src/render-canvas.ts`) as a second consumer of
-  `ResolvedElement[]`, proving the resolver's output type is the actual
-  contract, not the DOM renderer's JSX
+- `mobilePortrait`
+- `mobileLandscape`
+- `broadcastLowerThird`
+- `retailKiosk`
+- `compactWidget`
 
-Skipped: a `measureText`-aware sizing pass (would need a dependency injected
-into an otherwise dependency-free resolver — legitimate, but explicitly
-framed as optional polish); a general constraint solver (explicitly
-discouraged by the assessment's own FAQ).
+The same ad spec is resolved every time. The compact widget is intentionally
+too small for every element at full size, so the debug panel shows the
+priority-based degradation trace. The Custom tab accepts an arbitrary
+`SurfaceProfile` JSON object and sends it through the same
+`defineSurfaceProfile()` -> `resolve()` path as the presets.
 
-## Limitations (by design, not oversight)
+The renderer toggle switches between DOM and Canvas consumers of the same
+`ResolvedLayout`. The resolver itself imports no React, DOM, or Canvas APIs.
 
-- **Heuristic text truncation.** No real text-measurement is wired in;
-  truncation estimates how many characters fit from `fontSize × 0.55` per
-  character. Good enough to demonstrate the degradation stage; not
-  pixel-accurate.
-- **Fixed element type set.** `text | image | button` only — adding a new
-  type means adding a case to the discriminated union and its two exhaustive
-  switches (`resolver.ts` uses `assertNever` so a missing case is a compile
-  error, not a silent runtime gap).
-- **Monotonic degradation.** Once an element shrinks, truncates, or drops,
-  it never grows back — even if a later drop on a different element frees
-  up space that would have let it recover. This is a deliberate scoping
-  choice: fully deterministic, no oscillation risk, no second pass needed.
-- **Equal-priority tie-break = declaration order.** `headline` and `cta`
-  both carry `priority: 1` in the demo spec; ties resolve by the order they
-  appear in `AdSpec.elements` (JS's stable sort).
-- **Degradation order is global, not region-local.** The candidate for the
-  next degradation step is always the globally least-important surviving
-  element, even if degrading it wouldn't relieve whichever region is
-  actually overflowing. This is why `branding` (priority 5) degrades first
-  in every cramped-surface demo even when the real pressure is a text stack
-  it isn't part of — simple and deterministic beats "figure out which
-  element is actually the problem."
-- **`split`/`banner` have no fallback for an unbreakable headline word.** The
-  demo spec's headline is deliberately undroppable and untruncatable (it
-  auto-fits to 2 lines instead), so if a narrow `split`/`banner` copy column
-  meets an unusually large `minTextSize`, a single word can end up wider
-  than the column at the mandatory floor size with nowhere left to shrink —
-  the resolver correctly throws rather than silently clipping, but it can't
-  recompose around it. Confirmed independent of any other change: a
-  240×120 touch surface with `minTextSize: 22` hits this in isolation.
-  The new `micro` template (surfaces small in both dimensions, e.g. a
-  220×220 "watch face") *does* guard against this — it measures the actual
-  wrap width against the real column before committing, and falls back to a
-  full-width `stack` if the split can't fit — `split`/`banner` don't yet have
-  the equivalent check. Fixing it means generalizing that same
-  measure-before-committing guard to the other two templates; scoped out
-  here as a targeted, deliberately small change rather than reworking two
-  well-tested code paths for a combination no preset or the assignment's own
-  test surfaces ever produce.
-- **Canvas renderer text fit.** `CanvasRenderingContext2D.fillText`'s
-  `maxWidth` argument horizontally compresses text that doesn't fit rather
-  than truncating it — a native canvas API quirk, visible if you toggle to
-  the canvas renderer on a cramped surface. The DOM renderer instead relies
-  on CSS `text-overflow: ellipsis`.
+## Resolution Flow
 
+```text
+Ad Spec + Surface Profile
+  -> runtime validators
+  -> constraint resolver
+  -> ResolvedLayout
+  -> DOM or Canvas renderer
+```
 
-## Build order
+## Layout Algorithm
 
-1. Repo/tooling setup (Vite + React + TS strict), `spec.ts` / `surfaces.ts`
-   types and runtime validators, the 5 preset surfaces, the demo ad spec.
-2. `resolver.ts` phases A–C (natural sizing + region packing, no
-   degradation yet) wired to a minimal DOM renderer and surface picker —
-   first visible cross-surface milestone.
-3. The priority-ordered degradation loop (phase D), `invariants.ts`,
-   `tests/resolver.test.ts`, the Custom Surface JSON tab, the debug panel.
-4. Verification pass (tsc, vitest, build, manual browser walkthrough of all
-   presets + an unseen surface) — found and fixed two real geometry bugs in
-   this pass (hero image height was being stretched instead of aspect-fit
-   in row-mode layout; text elements had no visual fallback for content
-   that overflowed their box, now handled with CSS ellipsis) — then the
-   canvas renderer bonus, animation/accessibility polish, and this
-   documentation.
+1. Build the content box from the surface size minus `safeArea`.
+2. Compute a continuous type base and gap from the content-box area, height,
+   viewing distance, tap-target floor, and text floor.
+3. Choose a template from numeric constraints, not `surface.id`:
+   `stack` for portrait/narrow boxes, `split` for square or landscape boxes,
+   `banner` for very wide strips, and `micro` for surfaces small in both
+   dimensions.
+4. Before committing to side-by-side templates, check whether the headline can
+   fit the real copy column at its required text floor. If not, fall back to
+   `stack` where the copy gets the full width.
+5. Compose all currently visible elements into concrete rectangles. Hero
+   images are elastic; they take the space left by the copy rather than a
+   fixed percentage. Text wrapping is decided inside the resolver so renderers
+   do not guess.
+6. If the composition overflows, degrade exactly one element and recompose.
+   Lower-priority elements degrade before higher-priority ones.
+7. Return visible elements, dropped element IDs, and a plain-English warning
+   trace. Run invariant checks for bounds, overlap, tap targets, text floors,
+   accounting, and priority-drop correctness before returning.
+
+Degradation stages are deterministic:
+
+- text shrinks to its floor, then truncates if allowed, then drops if allowed
+- non-hero images shrink, then drop
+- hero images are elastic, then drop only if their role and priority allow it
+- buttons never shrink below tap or text floors; they only drop if the spec
+  explicitly allows it
+
+## TypeScript Design
+
+- `ElementSpec` is a discriminated union on `type`: `text | image | button`.
+- `ElementRole` is a closed union: `headline | price | secondary |
+  hero-image | branding | cta`.
+- Runtime validation enforces the role/type pairing the templates assume:
+  headline, price, and secondary are text; hero-image and branding are images;
+  cta is a button.
+- The validator rejects duplicate IDs and duplicate roles, so every semantic
+  slot is placed once, dropped once, or reported as invalid.
+- `SurfaceProfile` is a union where `{ touchOnly: true }` requires
+  `minTapTarget`.
+- `Validated<T>` is a branded type. `resolve()` only accepts validated specs
+  and surfaces.
+- `ResolvedLayout` is renderer-ready: each visible element has absolute
+  `x/y/width/height`, plus text lines, font size, content, or image source as
+  appropriate.
+
+## Files To Review
+
+- `src/spec.ts` - ad spec types and validation
+- `src/surfaces.ts` - surface types, validation, and presets
+- `src/resolver.ts` - framework-independent layout algorithm
+- `src/invariants.ts` - bounds, overlap, constraint, and accounting checks
+- `src/render-dom.tsx` - DOM renderer
+- `src/render-canvas.ts` - Canvas renderer
+- `src/App.tsx` - demo wiring
+- `ARCHITECTURE.md` - detailed design walkthrough
+
+## Bonuses Implemented
+
+- Custom unknown-surface JSON input
+- Decision-trace debug panel
+- Animated transitions between resolved layouts
+- Basic accessibility: real CTA buttons, tap-target constraints, image labels
+- Canvas rendering backend using the same resolver output
+
+AI tools were used for review, implementation help, and documentation polish.
+All final code was verified locally with tests and build checks.
+
+## Limitations
+
+- The text metrics are heuristic. The resolver uses a small glyph-width model
+  so wrapping is deterministic without DOM measurement, but it is not a real
+  browser `measureText()` pass.
+- Degradation is monotonic. Once an element shrinks, truncates, or drops, it
+  does not grow back if a later drop frees space.
+- Degradation is global, not region-local. The next candidate is the least
+  important surviving element even if another element is causing the local
+  pressure.
+- The element library is intentionally small: text, image, and button.
+- Canvas is a bonus renderer. It consumes the same layout contract, but the
+  DOM renderer is the primary demo path because it supports the richer 3D hero
+  treatment.
+- Extremely tiny surfaces can still throw if the undroppable headline and CTA
+  cannot physically fit inside the safe area. That is reported as an explicit
+  error rather than clipping.

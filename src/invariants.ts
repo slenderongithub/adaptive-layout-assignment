@@ -44,15 +44,29 @@ export function checkInvariants(
 
   const minTextSize = surface.minTextSize ?? 0;
   for (const el of layout.elements) {
-    if (el.type !== "text") continue;
+    if (el.type !== "text" && el.type !== "button") continue;
     if ((el.fontSize ?? 0) < minTextSize) {
       violations.push(`"${el.id}" fontSize ${el.fontSize} is below surface minTextSize ${minTextSize}`);
     }
   }
 
   const visibleIds = new Set(layout.elements.map((el) => el.id));
+  const seenOutputIds = new Set<string>();
+  const specIds = new Set(spec.elements.map((el) => el.id));
+
+  for (const el of layout.elements) {
+    if (seenOutputIds.has(el.id)) violations.push(`"${el.id}" appears more than once in elements`);
+    seenOutputIds.add(el.id);
+    if (!specIds.has(el.id)) violations.push(`"${el.id}" appears in elements but not in the input spec`);
+  }
   for (const id of layout.droppedElementIds) {
     if (visibleIds.has(id)) violations.push(`"${id}" appears in both elements and droppedElementIds`);
+    if (!specIds.has(id)) violations.push(`"${id}" appears in droppedElementIds but not in the input spec`);
+  }
+  for (const id of specIds) {
+    if (!visibleIds.has(id) && !layout.droppedElementIds.includes(id)) {
+      violations.push(`"${id}" is neither placed nor reported as dropped`);
+    }
   }
 
   const priorityById = new Map(spec.elements.map((el) => [el.id, el.priority]));

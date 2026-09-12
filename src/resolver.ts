@@ -240,6 +240,21 @@ function fontFloor(spec: Extract<ElementSpec, { type: "text" }>, ctx: Ctx): numb
   return Math.max(ctx.textFloor, TYPE_MIN, spec.minFontSize ?? 0);
 }
 
+function buttonFontSize(ctx: Pick<Ctx, "base" | "textFloor">): number {
+  const floor = Math.max(ctx.textFloor, CTA_FONT_MIN);
+  return Math.max(Math.round(clamp(ctx.base * CTA_FONT_RATIO, CTA_FONT_MIN, CTA_FONT_MAX)), floor);
+}
+
+function buttonMetrics(label: string, ctx: Pick<Ctx, "base" | "tapFloor" | "textFloor">) {
+  const fontSize = buttonFontSize(ctx);
+  const padX = fontSize * CTA_PAD_RATIO;
+  return {
+    fontSize,
+    width: Math.max(CTA_MIN_WIDTH, ctx.tapFloor, Math.round(measureText(label, fontSize, "cta") + padX * 2)),
+    height: Math.max(ctx.tapFloor, Math.round(fontSize * CTA_HEIGHT_RATIO)),
+  };
+}
+
 function createState(spec: ElementSpec, ctx: Ctx): ElementState {
   switch (spec.type) {
     case "text": {
@@ -254,10 +269,7 @@ function createState(spec: ElementSpec, ctx: Ctx): ElementState {
       return { spec, visible: true, width: height * spec.aspectRatio, height };
     }
     case "button": {
-      const fontSize = Math.round(clamp(ctx.base * CTA_FONT_RATIO, CTA_FONT_MIN, CTA_FONT_MAX));
-      const padX = fontSize * CTA_PAD_RATIO;
-      const width = Math.max(CTA_MIN_WIDTH, ctx.tapFloor, Math.round(measureText(spec.label, fontSize, "cta") + padX * 2));
-      const height = Math.max(ctx.tapFloor, Math.round(fontSize * CTA_HEIGHT_RATIO));
+      const { fontSize, width, height } = buttonMetrics(spec.label, ctx);
       return { spec, visible: true, fontSize, width, height };
     }
     default:
@@ -547,6 +559,11 @@ function compose(states: Map<string, ElementState>, ctx: Ctx): Composition {
     if (template === "banner" && cta) {
       const width = cta.width ?? 0;
       const height = cta.height ?? 0;
+      // Banner CTAs live in their own right-hand column, so they are not part
+      // of `blockHeight`. Still, their hard tap/text floors must fit the
+      // content box vertically; otherwise placement below would produce a
+      // clipped button while the composition incorrectly reported success.
+      if (height > box.height + 0.1 || width > box.width + 0.1) overflow = true;
       placed.set(cta.spec.id, {
         x: box.x + box.width - width,
         y: box.y + (box.height - height) / 2,
@@ -630,6 +647,45 @@ function degradeOneStep(state: ElementState, ctx: Ctx): string {
     default:
       return assertNever(spec);
   }
+}
+
+function sideBySideTextWidth(spec: Validated<AdSpec>, ctx: Ctx): number {
+  const { box, template, gap } = ctx;
+  const hero = spec.elements.find(
+    (el): el is Extract<ElementSpec, { type: "image" }> => el.role === "hero-image" && el.type === "image",
+  );
+  const cta = spec.elements.find(
+    (el): el is Extract<ElementSpec, { type: "button" }> => el.role === "cta" && el.type === "button",
+  );
+  const minTextColumn = minTextColumnFor(box.width);
+  let ctaColumn = 0;
+  let heroColumn = 0;
+
+  if (template === "banner" && cta) ctaColumn = buttonMetrics(cta.label, ctx).width + gap;
+
+  if (hero) {
+    const maxFraction = template === "banner" ? BANNER_HERO_MAX_WIDTH_FRACTION : SPLIT_HERO_MAX_WIDTH_FRACTION;
+    const want = Math.min(box.height * hero.aspectRatio, box.width * maxFraction);
+    const room = box.width - ctaColumn - gap - minTextColumn;
+    const heroWidth = Math.max(HERO_MIN_PX, Math.min(want, room));
+    heroColumn = heroWidth + gap;
+  }
+
+  return box.width - heroColumn - ctaColumn;
+}
+
+function shouldFallbackToStackForHeadline(spec: Validated<AdSpec>, ctx: Ctx): boolean {
+  if (ctx.template !== "split" && ctx.template !== "banner") return false;
+  const headline = spec.elements.find(
+    (el): el is Extract<ElementSpec, { type: "text" }> => el.role === "headline" && el.type === "text",
+  );
+  if (!headline) return false;
+
+  const textWidth = sideBySideTextWidth(spec, ctx);
+  const floor = fontFloor(headline, ctx);
+  const lines = wrapText(headline.content, floor, textWidth, "headline");
+  const widest = Math.max(...lines.map((line) => measureText(line, floor, "headline")));
+  return widest > textWidth + 0.5 || lines.length > MAX_HEADLINE_LINES;
 }
 
 /* ==========================================================================
@@ -726,13 +782,12 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
     // column's real width — what the headline actually has to fit — depends
     // on it. See composeMicro for the width split this mirrors.
     const ctaSpec = spec.elements.find((e) => e.role === "cta");
-    const ctaFontSize = Math.round(clamp(effectiveBase * CTA_FONT_RATIO, CTA_FONT_MIN, CTA_FONT_MAX));
-    const ctaPadX = ctaFontSize * CTA_PAD_RATIO;
-    const ctaWidth =
+    const ctaMetrics =
       ctaSpec?.type === "button"
-        ? Math.max(CTA_MIN_WIDTH, tapFloor, Math.round(measureText(ctaSpec.label, ctaFontSize, "cta") + ctaPadX * 2))
-        : CTA_MIN_WIDTH;
-    const ctaHeight = Math.max(tapFloor, Math.round(ctaFontSize * CTA_HEIGHT_RATIO));
+        ? buttonMetrics(ctaSpec.label, { base: effectiveBase, tapFloor, textFloor })
+        : { fontSize: buttonFontSize({ base: effectiveBase, textFloor }), width: CTA_MIN_WIDTH, height: tapFloor };
+    const ctaWidth = ctaMetrics.width;
+    const ctaHeight = ctaMetrics.height;
     const rightColWidth = Math.min(
       Math.max(ctaWidth, box.width * 0.3),
       box.width - effectiveGap - MICRO_MIN_LEFT_COLUMN_WIDTH,
@@ -760,7 +815,11 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
     // full-width `stack`, where text wraps against the whole box instead of
     // half of it, handles it better, so fall back to that rather than
     // forcing an infeasible split.
-    if (minBarHeight > box.height - effectiveGap - HERO_MIN_PX || headlineWidest > leftColWidth + 0.5) {
+    if (
+      ctaWidth > box.width - effectiveGap - MICRO_MIN_LEFT_COLUMN_WIDTH ||
+      minBarHeight > box.height - effectiveGap - HERO_MIN_PX ||
+      headlineWidest > leftColWidth + 0.5
+    ) {
       template = "stack";
       effectiveBase = base;
       effectiveGap = gap;
@@ -781,6 +840,11 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
     heroHeight,
     barHeight,
   };
+
+  if (shouldFallbackToStackForHeadline(spec, ctx)) {
+    template = "stack";
+    ctx.template = template;
+  }
 
   const states = new Map<string, ElementState>();
   for (const el of spec.elements) states.set(el.id, createState(el, ctx));
@@ -822,7 +886,9 @@ export function resolve(spec: Validated<AdSpec>, surface: Validated<SurfaceProfi
       continue;
     }
     const rect = composition.placed.get(state.spec.id);
-    if (!rect) continue;
+    if (!rect) {
+      throw new Error(`resolve(): visible element "${state.spec.id}" received no rectangle`);
+    }
 
     const elSpec = state.spec;
     const resolvedEl: ResolvedElement = {
