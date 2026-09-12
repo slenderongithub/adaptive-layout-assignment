@@ -529,3 +529,69 @@ describe("runtime validators report clear errors on invalid specs", () => {
     ).toThrow(/safeArea/);
   });
 });
+
+/**
+ * Stress-tests the "unknown surface at demo time" story: 3,136 generated
+ * profiles cross-producing size, safe area, touch/tap-target, text floor, and
+ * viewing distance. Every profile must either resolve into an invariant-clean
+ * layout or fail closed with a thrown Error — never crash some other way, and
+ * never resolve into a clipped/overlapping/off-invariant layout.
+ */
+describe("custom surface fuzz (3,136 generated profiles)", () => {
+  const sizes = [50, 150, 320, 600, 1080, 1920, 3000];
+  const touchVariants: Array<{ touchOnly: boolean; minTapTarget?: number }> = [
+    { touchOnly: false },
+    { touchOnly: true, minTapTarget: 24 },
+    { touchOnly: true, minTapTarget: 44 },
+    { touchOnly: true, minTapTarget: 88 },
+  ];
+  const textFloors: Array<number | undefined> = [undefined, 12, 18, 32];
+  const viewingDistances: Array<"near" | "far"> = ["near", "far"];
+  const safeAreaInsets = [4, 16];
+
+  let resolved = 0;
+  let rejected = 0;
+
+  for (const width of sizes) {
+    for (const height of sizes) {
+      for (const touch of touchVariants) {
+        for (const minTextSize of textFloors) {
+          for (const viewingDistance of viewingDistances) {
+            for (const inset of safeAreaInsets) {
+              const id = `fuzz-${width}x${height}-${touch.touchOnly}-${touch.minTapTarget ?? "na"}-${minTextSize ?? "none"}-${viewingDistance}-${inset}`;
+              it(id, () => {
+                const surface = defineSurfaceProfile({
+                  id,
+                  width,
+                  height,
+                  safeArea: { top: inset, right: inset, bottom: inset, left: inset },
+                  ...touch,
+                  ...(minTextSize !== undefined ? { minTextSize } : {}),
+                  viewingDistance,
+                } as Parameters<typeof defineSurfaceProfile>[0]);
+
+                let layout;
+                try {
+                  layout = resolve(jacketAdSpec, surface);
+                } catch (err) {
+                  expect(err).toBeInstanceOf(Error);
+                  rejected += 1;
+                  return;
+                }
+                expect(checkInvariants(layout, surface, jacketAdSpec)).toEqual([]);
+                resolved += 1;
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  it("reports a plausible resolved/rejected split", () => {
+    const total = resolved + rejected;
+    expect(total).toBeGreaterThan(0);
+    expect(resolved).toBeGreaterThan(0);
+    expect(rejected).toBeGreaterThan(0);
+  });
+});

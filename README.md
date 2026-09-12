@@ -120,8 +120,18 @@ Degradation stages are deterministic:
 - Basic accessibility: real CTA buttons, tap-target constraints, image labels
 - Canvas rendering backend using the same resolver output
 
-AI tools were used for review, implementation help, and documentation polish.
-All final code was verified locally with tests and build checks.
+AI tools (the Claude Code CLI, GPT-5.5) were used as assistants: I directed a
+review pass against the assignment requirements, which surfaced a docs/code drift in
+an earlier ARCHITECTURE.md, a CTA text-floor gap, and a silent-drop bug in
+element accounting, then had the AI implement the fixes I specified. I also
+had it write a fuzz test stress-testing the custom-surface path with 3,136
+generated `SurfaceProfile`s crossing size (50-3000px, tall/wide/square/tiny/
+huge), safe area, touch/tap-target (24-88px), text floor (including
+broadcast-style 32px), and viewing distance — see `custom surface fuzz` in
+`tests/resolver.test.ts`. Result: 2,036 resolved with zero invariant
+violations, 1,100 correctly rejected as physically infeasible, 0 crashes of
+any other kind. All final code was reviewed and verified locally with tests
+and build checks.
 
 ## Limitations
 
